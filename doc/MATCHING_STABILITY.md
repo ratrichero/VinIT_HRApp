@@ -1,6 +1,6 @@
 # Ổn định matching CV–JD
 
-> **Cập nhật migration 00019:** Các hướng dẫn bật/tắt bằng biến môi trường trong tài liệu lịch sử bên dưới không áp dụng cho worker mới. Xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) về database control, giới hạn OFF và rollout/rollback không mixed-version. Chưa triển khai thay đổi này lên môi trường thật.
+> **Cập nhật migration 00019:** Các hướng dẫn bật/tắt bằng biến môi trường trong tài liệu lịch sử bên dưới không áp dụng cho worker mới. Xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) về database control, giới hạn OFF và rollout/rollback không mixed-version. Code `5f5c529` đã deploy VPS test theo log người dùng; chưa chứng minh production readiness.
 
 Tài liệu này mô tả kiến trúc matching Phase 0–2 cùng lớp semantic retrieval (pgvector/BGE) và Learning-to-Rank được triển khai theo hướng tắt mặc định, có gate an toàn. Tài liệu liên quan: [thiết kế database](HRA_DatabaseDesign.md), [kiến trúc LLM](HRA_LLM_Architecture.md), [kiến trúc giải pháp](HRA_ArchitectureDesign.md), [vận hành/triển khai](../DEPLOYMENT.md) và [báo cáo triển khai pgvector/BGE/LTR](../audit/PGVECTOR_BGE_LTR_IMPLEMENTATION.md).
 

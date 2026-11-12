@@ -1,6 +1,6 @@
 # Triển khai VinUni HRApp trên VPS không dùng Docker
 
-> **Cập nhật migration 00019:** Các hướng dẫn bật/tắt bằng biến môi trường trong tài liệu lịch sử bên dưới không áp dụng cho worker mới. Xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) về database control, giới hạn OFF và rollout/rollback không mixed-version. Chưa triển khai thay đổi này lên môi trường thật.
+> **Cập nhật migration 00019:** Các hướng dẫn bật/tắt bằng biến môi trường trong tài liệu lịch sử bên dưới không áp dụng cho worker mới. Xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) về database control, giới hạn OFF và rollout/rollback không mixed-version. Code `5f5c529` đã deploy VPS test theo log người dùng; chưa chứng minh production readiness.
 
 > Hướng dẫn này dành cho **staging/pilot với dữ liệu tổng hợp**, chạy trực tiếp bằng Python/Node trên Ubuntu và quản lý hai tiến trình ứng dụng bằng **PM2** (không tạo unit `systemd` cho backend/frontend). Đây chưa phải chứng nhận production. Supabase Auth/Storage thật, OCR, model thật và quy trình vận hành vẫn phải được kiểm thử đầu-cuối trong môi trường đích. Không dùng CV thật trước khi hoàn tất phê duyệt bảo mật/pháp lý, retention, backup/restore và đánh giá AI. Không đưa secret vào Git, log, ticket hay chat.
 

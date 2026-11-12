@@ -2,7 +2,7 @@
 
 ## Phạm vi và trạng thái
 
-Migration `00019` đã áp vào project test `myrymlqdbyqmpynesiwk` dưới version `20261112081935 ai_runtime_controls`, sau khi người dùng xác nhận dừng toàn bộ HRA và chấp nhận không có backup. Pre/postflight: queue PENDING/PROCESSING đều 0; một route-set BGE đã chọn được giữ nguyên, không có current LTR selection; control BGE/LTR đều OFF, constraint và quyền chính đã kiểm tra. **Code mới chưa deploy; HRA vẫn dừng theo xác nhận của người dùng.** Không tự bật BGE/LTR.
+Migration `00019` đã áp vào project test `myrymlqdbyqmpynesiwk` dưới version `20261112081935 ai_runtime_controls`, sau khi người dùng xác nhận dừng toàn bộ HRA và chấp nhận không có backup. Pre/postflight: queue PENDING/PROCESSING đều 0; một route-set BGE đã chọn được giữ nguyên, không có current LTR selection; control BGE/LTR đều OFF, constraint và quyền chính đã kiểm tra. Người dùng báo deploy code `5f5c529` trên VPS test: build Next.js, restart `hra-backend` và `hra-frontend`, readiness và smoke tests đều thành công. Không tự bật BGE/LTR; trạng thái control trên đây là kết quả kiểm tra ngay sau migration, chưa kiểm tra lại sau deploy. Chưa xác minh provider, worker fleet hay E2E/CV thật.
 
 Thay đổi này đổi ranh giới vận hành: sau khi toàn bộ API/worker chạy code mới, Admin có thể bật/tắt BGE và LTR trực tiếp; bốn cờ legacy `SEMANTIC_RETRIEVAL_ENABLED`, `ALLOW_MANAGED_BGE_ROUTING`, `ALLOW_MANAGED_LTR_ROUTING`, `LTR_MODE` không còn là công tắc của worker mới. Worker cũ vẫn theo cờ môi trường, không theo control OFF trong database. UI báo trạng thái trong database, không chứng minh worker còn sống, đồng bộ phiên bản hay provider đang hoạt động.
 

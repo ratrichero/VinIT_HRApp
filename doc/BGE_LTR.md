@@ -1,6 +1,6 @@
 # BGE, pgvector và Learning-to-Rank (LTR) cho VinIT HRApp
 
-> **Cập nhật migration 00019:** Các hướng dẫn bật/tắt bằng biến môi trường trong tài liệu lịch sử bên dưới không áp dụng cho worker mới. Xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) về database control, giới hạn OFF và rollout/rollback không mixed-version. Chưa triển khai thay đổi này lên môi trường thật.
+> **Cập nhật migration 00019:** Các hướng dẫn bật/tắt bằng biến môi trường trong tài liệu lịch sử bên dưới không áp dụng cho worker mới. Xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) về database control, giới hạn OFF và rollout/rollback không mixed-version. Code `5f5c529` đã deploy VPS test theo log người dùng; chưa chứng minh production readiness.
 
 > Ghi chú lịch sử: tài liệu ban đầu ngày 2026-11-07. Các nhận định cũ về trạng thái môi trường và readiness không được xem là xác nhận hiện tại; xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) cho thay đổi mã mới, gate và giới hạn chưa triển khai.
 > Phạm vi: semantic retrieval bằng embedding model họ BGE, lưu/truy vấn vector bằng pgvector, và Learning-to-Rank cho bước xếp hạng ứng viên.
