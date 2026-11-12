@@ -57,7 +57,7 @@ import Autocomplete from '@mui/material/Autocomplete';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { assessmentsApi, operationsApi, applicationsApi, shortlistApi } from '@/lib/api';
+import { assessmentsApi, operationsApi, applicationsApi, shortlistApi, positionsApi, type DuplicateSignal } from '@/lib/api';
 import StatusBadge from '@/components/common/StatusBadge';
 import QueueFilterChips from '@/components/applicants/QueueFilterChips';
 import OperationProgressPanel from '@/components/workflow/OperationProgressPanel';
@@ -90,6 +90,21 @@ export default function ApplicantsRankingPage() {
   const { t } = useI18n();
   const params = useParams();
   const positionId = params.id as string;
+
+  const [duplicateSignals, setDuplicateSignals] = useState<DuplicateSignal[] | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [duplicateLoading, setDuplicateLoading] = useState(false);
+  const loadDuplicates = async () => {
+    setDuplicateLoading(true);
+    setDuplicateError(null);
+    try {
+      const response = await positionsApi.getDuplicateSignals(positionId);
+      setDuplicateSignals(response.data);
+    } catch (err: any) {
+      setDuplicateSignals(null);
+      setDuplicateError(err.response?.data?.detail || t("Không thể tải cảnh báo trùng"));
+    } finally { setDuplicateLoading(false); }
+  };
 
   const [rankingItems, setRankingItems] = useState<RankingItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -792,6 +807,38 @@ export default function ApplicantsRankingPage() {
         </Table>
       </TableContainer>
       </>}
+
+      <Card sx={{ mt: 3 }}>
+        <CardContent>
+          <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap">
+            <Typography variant="h6">{t("Cặp cảnh báo trùng hồ sơ")}</Typography>
+            <Button onClick={loadDuplicates} disabled={duplicateLoading}>
+              {duplicateLoading ? t("Đang tải...") : t("Tải cảnh báo trùng")}
+            </Button>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ my: 1 }}>
+            {t("Chỉ xem tín hiệu đã ghi nhận trong vị trí này; tín hiệu có thể cũ và không xác nhận hai hồ sơ là trùng.")}
+          </Typography>
+          {duplicateError && <Alert severity="error">{t(duplicateError)}</Alert>}
+          {duplicateSignals && duplicateSignals.length === 0 && <Typography>{t("Chưa có cảnh báo trùng.")}</Typography>}
+          {duplicateSignals?.map(signal => (
+            <Box key={signal.signal_id} sx={{ borderTop: '1px solid #eee', py: 1.5 }}>
+              <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+                <MuiLink component={Link} href={`/positions/${positionId}/applicants/${signal.application_id_1}`}>
+                  {signal.candidate_name_1 || signal.application_id_1}
+                </MuiLink>
+                <Typography>↔</Typography>
+                <MuiLink component={Link} href={`/positions/${positionId}/applicants/${signal.application_id_2}`}>
+                  {signal.candidate_name_2 || signal.application_id_2}
+                </MuiLink>
+              </Stack>
+              <Typography variant="body2" color="text.secondary">
+                {signal.signal_type} · {t("Độ tin cậy")} {Math.round(Number(signal.confidence) * 100)}% · {signal.review_status}
+              </Typography>
+            </Box>
+          ))}
+        </CardContent>
+      </Card>
 
       {/* Shortlist Share Dialog */}
       <Dialog open={shareDialogOpen} onClose={() => !shareSubmitting && setShareDialogOpen(false)} maxWidth="sm" fullWidth>

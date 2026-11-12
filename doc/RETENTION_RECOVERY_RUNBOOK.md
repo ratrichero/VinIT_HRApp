@@ -1,0 +1,25 @@
+# Retention: vận hành và phục hồi khi storage/DB không đồng bộ
+
+> Bản chuẩn bị cho review, **không phải phê duyệt vận hành hoặc lệnh chạy thực tế**. Việc xóa vẫn thủ công từng application, không có scheduler. Không chạy E2E khi đang bị treo. Migration `00014` và code cần đi cùng nhau, qua test/review và quy trình deploy trước khi dùng.
+
+## Cơ chế và giới hạn
+
+- Trước khi gọi storage, service kiểm tra snapshot đóng, thời hạn, tác vụ/tài liệu đang xử lý và feedback/note chung, sau đó commit `deletion_jobs.status=PROCESSING` làm hàng rào bền vững. API mở lại/đổi khỏi CLOSED, cancel case, tạo share/feedback và queue assessment/ranking bị chặn trong khi có job PROCESSING của position.
+- Trong vòng xóa, position/case/application/share tiếp tục được khóa qua lần xóa storage và purge DB. Advisory transaction lock trên connection riêng từ chối hai executor đồng thời khi connection còn sống. Cần kết nối PostgreSQL có transaction dài ổn định; kiểm tra pooler/timeout trong topology thật.
+- Lỗi sau khi fence đã commit **không tự chuyển job thành FAILED** và không tự retry: job tiếp tục PROCESSING, có thể có mã lỗi an toàn `RECOVERY_REQUIRED:<exception type>`. Mã lỗi/audit là best effort; mất kết nối hoặc crash có thể không ghi được diagnostic. Danh sách case trả `execution_status` và `execution_in_progress_or_recovery`; PROCESSING có thể là đang chạy bình thường, không tự chứng minh treo.
+- Không có transaction chung DB/storage và không thể hoàn tác file đã xóa. Nếu crash hoặc mất DB connection, storage request cũ vẫn có thể đang chạy dù advisory lock đã giải phóng. **Không coi PROCESSING là bằng chứng executor cũ đã dừng.** Không khôi phục chỉ dựa vào timeout hoặc lock; cần vận hành xác nhận độc lập.
+- Hàng rào được backend áp dụng: triển khai phải drain và loại bỏ mọi backend/worker phiên bản cũ trước khi mở thao tác; các thao tác trực tiếp bằng SQL/storage, quyền DBA, worker cũ hoặc request provider đã bay không được fence tự động bảo vệ. Phải kiểm soát bằng quy trình/quyền. Cơ chế này không chứng minh dữ liệu backup hoặc log/provider ngoài hệ thống đã bị xóa.
+- Nếu có feedback chung (`application_id IS NULL`) hoặc note chung trên share đang liên kết hồ sơ, service dừng trước storage. Sau purge, cờ không chứa định danh chặn feedback chung mới trên share đó; có thể tạo share mới cho các hồ sơ còn lại. Feedback riêng vẫn có thể nhắc đến người khác; share cũ đã purge trước `00014` không thể tự suy ra lịch sử từ item đã mất. Không xóa/sửa feedback chung khi chưa có quyết định Privacy/HR.
+
+## Chỉ dẫn khi gặp job PROCESSING kéo dài hoặc lỗi
+
+1. **Dừng mọi thao tác xóa/cancel/reopen, thay schema, retry/worker và sửa dữ liệu liên quan.** Ghi case ID, opaque ID, position ID, status, job ID và mốc thời gian qua kênh an toàn; không ghi CV/filename/token. Gọi HR Lead/Admin và DevOps. Kiểm tra xem executor còn chạy bình thường hay không; tránh can thiệp sớm.
+2. DevOps phải xác nhận **process/request executor cũ đã chấm dứt**, mọi instance/mixed-version liên quan đã drain, và các request storage cũ không còn in-flight theo xác nhận/log/provider/quy trình hạ tầng. Nếu không chứng minh được, giữ fence, escalation; không retry. Advisory lock không chứng minh an toàn sau mất connection.
+3. Đối soát case, snapshot `CLOSED`/`closed_at`, quyền, policy, các operation, và storage/DB theo phạm vi được phép; không công bố đường dẫn hoặc dữ liệu cá nhân. Kiểm tra feedback/note chung, các file có thể đã mất và backup. Nếu có hold/sự cố privacy/đối soát không chắc chắn, dừng và chuyển HR/Privacy/Legal; không sửa trạng thái job bằng SQL để vượt guard.
+4. Chỉ khi HR Lead/Admin có quyền xác nhận xóa vẫn quyết định **tiếp tục xóa**, và DevOps đã xác nhận bước 2–3, gọi thủ công API `POST /v1/retention/cases/{case_id}/recover` với JSON `{"confirmation":"EXECUTOR_STOPPED_AND_STORAGE_SETTLED"}`. Đây là xác nhận có trách nhiệm, không tự kiểm chứng provider; API từ chối nếu case không có job PROCESSING hoặc executor còn giữ advisory lock. Hành động được audit. Không chạy lệnh này như một phần checklist/test bình thường.
+5. Retry xóa object theo đường dẫn được ghi trong DB, xem object đã mất là missing; sau đó purge DB và đánh dấu job COMPLETED/case DELETED trong một transaction. Count deleted/missing của retry **chỉ là lần retry**, không phải tổng số đã xóa ở những lần trước. Đối soát riêng storage/DB/audit theo policy. Nếu retry lỗi, fence vẫn giữ; lặp từ bước 1, không mở lại/cancel.
+6. Nếu quyết định **không tiếp tục xóa**, không có API bỏ fence tùy tiện: cần incident/change review, đánh giá file đã mất/khôi phục từ backup và quyền riêng tư, thiết kế phương án xử lý được phê duyệt. Không hứa có thể phục hồi dữ liệu; không sửa DB bằng tay như đường tắt.
+
+## Phát hành
+
+Trước release, xác nhận migration `00014` và code tương thích, chạy CI PostgreSQL/pgvector thực, review recovery và ảnh hưởng đến shares, kế hoạch rollback (không drop cột/audit nếu chưa được duyệt), bằng chứng test và phê duyệt owner. Migration không backfill lịch sử đã mất. Đừng áp migration hoặc thực thi purge trên VPS/project kết nối từ runbook này.

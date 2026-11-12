@@ -348,6 +348,10 @@ async def update_position(position_id: UUID, update: PositionUpdate, current_use
         previous = db.execute(text("SELECT status FROM app_private.positions WHERE position_id = :id FOR UPDATE"), {"id": str(position_id)}).scalar_one_or_none()
         if not previous:
             raise NotFoundError("Position")
+        if "status" in allowed and allowed["status"] != "CLOSED":
+            from app.services.retention import position_has_inflight_purge
+            if position_has_inflight_purge(db, str(position_id)):
+                raise HTTPException(status_code=409, detail="Vị trí có case xóa đang xử lý hoặc cần phục hồi; chưa thể mở lại")
         sets = ", ".join(f"{key} = :{key}" for key in allowed)
         if "status" in allowed:
             # closed_at represents the current closure; the status-event trail
@@ -427,5 +431,33 @@ async def create_jd_version(position_id: UUID, request: JDVersionCreate, current
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+@router.get("/{position_id}/duplicate-signals")
+async def list_duplicate_signals(position_id: UUID, current_user: dict = Depends(get_current_user)):
+    """Read existing signals only; both applications must belong to this position."""
+    from app.api.candidate_details import _require_hr_locked
+
+    db = SessionLocal()
+    try:
+        _require_hr_locked(db, current_user["user_id"], str(position_id), include_admin=True)
+        rows = db.execute(text("""
+            SELECT d.signal_id, d.signal_type, d.confidence, d.detector_version,
+                   d.review_status, d.created_at,
+                   a1.application_id AS application_id_1, i1.display_name AS candidate_name_1,
+                   a2.application_id AS application_id_2, i2.display_name AS candidate_name_2
+            FROM app_private.duplicate_signals d
+            JOIN app_private.applications a1 ON a1.application_id = d.application_id_1
+                AND a1.position_id = d.position_id
+            JOIN app_private.applications a2 ON a2.application_id = d.application_id_2
+                AND a2.position_id = d.position_id
+            LEFT JOIN app_private.application_identities i1 ON i1.application_id = a1.application_id
+            LEFT JOIN app_private.application_identities i2 ON i2.application_id = a2.application_id
+            WHERE d.position_id = :position_id
+            ORDER BY d.created_at DESC, d.signal_id DESC
+        """), {"position_id": str(position_id)}).mappings().all()
+        return [dict(row) for row in rows]
     finally:
         db.close()

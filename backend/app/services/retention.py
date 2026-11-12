@@ -155,6 +155,8 @@ def public_case(row: dict[str, Any]) -> dict[str, Any]:
         "position_closed_at": due_date and row.get("position_closed_at"),
         "due_date": due_date,
         "status": status,
+        "execution_status": row.get("execution_status"),
+        "execution_in_progress_or_recovery": row.get("execution_status") == "PROCESSING",
         "is_due": bool(due_date and _as_utc(due_date) <= _now() and status in ("PENDING", "SCHEDULED_FOR_DELETION")),
         "confirmed_by": str(row["confirmed_by"]) if row.get("confirmed_by") else None,
         "confirmed_at": row.get("confirmed_at"),
@@ -179,6 +181,89 @@ def get_case(db, case_id: str, *, for_update: bool = False) -> dict[str, Any]:
         raise RetentionError("Không tìm thấy retention case", status_code=404)
     return dict(row)
 
+
+def _lock_case_and_position(db, case_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Lock position before case, matching position-update/generate lock order."""
+    snapshot = get_case(db, case_id)
+    position_id = snapshot.get("position_id")
+    if not position_id:
+        raise RetentionError("Retention case không còn vị trí", status_code=409)
+    position = db.execute(text("""
+        SELECT position_id, status, closed_at FROM app_private.positions
+        WHERE position_id = :position_id FOR UPDATE
+    """), {"position_id": str(position_id)}).mappings().first()
+    if not position:
+        raise RetentionError("Retention case không còn vị trí", status_code=409)
+    case = get_case(db, case_id, for_update=True)
+    if str(case.get("position_id")) != str(position_id):
+        raise RetentionError("Retention case đã thay đổi vị trí", status_code=409)
+    return case, dict(position)
+
+
+def _require_original_closure(case: dict[str, Any], position: dict[str, Any]) -> None:
+    closed_at, snapshot = position.get("closed_at"), case.get("position_closed_at")
+    if (position.get("status") != "CLOSED" or not closed_at or not snapshot
+            or _as_utc(closed_at) != _as_utc(snapshot)):
+        raise RetentionError("Vị trí đã mở lại hoặc thời điểm đóng đã thay đổi; hủy case cũ và tạo lại khi đủ điều kiện", status_code=409)
+
+
+def _guard_share_level_text(db, application_id: str) -> None:
+    """Block ambiguous free text; never erase unrelated candidates' feedback.
+
+    Lock the application then its shares before examining text. Share creation
+    locks applications, and feedback insertion/revoke locks the share, so no
+    new ambiguous content can race storage deletion while this transaction runs.
+    """
+    db.execute(text("SELECT application_id FROM app_private.applications WHERE application_id=:id FOR UPDATE"),
+               {"id": application_id})
+    db.execute(text("""
+        SELECT s.share_id FROM app_private.shortlist_shares s
+        WHERE EXISTS (SELECT 1 FROM app_private.shortlist_share_items si
+                      WHERE si.share_id=s.share_id AND si.application_id=:id)
+        ORDER BY s.share_id FOR UPDATE OF s
+    """), {"id": application_id}).all()
+    ambiguous = db.execute(text("""
+        SELECT EXISTS (
+            SELECT 1 FROM app_private.shortlist_shares s
+            WHERE EXISTS (SELECT 1 FROM app_private.shortlist_share_items si
+                          WHERE si.share_id=s.share_id AND si.application_id=:id)
+              AND (NULLIF(BTRIM(s.note), '') IS NOT NULL OR EXISTS (
+                  SELECT 1 FROM app_private.shortlist_feedback f
+                  WHERE f.share_id=s.share_id AND f.application_id IS NULL
+              ))
+        )
+    """), {"id": application_id}).scalar_one()
+    if ambiguous:
+        raise RetentionError("Shortlist có ghi chú hoặc phản hồi chung cần HR/Privacy rà soát trước khi xóa", status_code=409)
+
+
+
+def position_has_inflight_purge(db, position_id: str) -> bool:
+    """Durable fence survives process death or a lost database connection.
+
+    Call while holding the position row lock for writes that could reopen or
+    enqueue work. PROCESSING is deliberately not cleared on uncertain failure.
+    """
+    return db.execute(text("""
+        SELECT 1 FROM app_private.deletion_jobs j
+        JOIN app_private.application_retention_cases c ON c.retention_case_id=j.retention_case_id
+        WHERE c.position_id=:position_id AND j.status='PROCESSING' LIMIT 1
+    """), {"position_id": position_id}).first() is not None
+
+
+def _require_no_active_processing(db, position_id: str) -> None:
+    # Existing workers may still write extracted objects; don't start deletion
+    # until all position operations and document processing have quiesced.
+    if db.execute(text("""
+        SELECT 1 FROM app_private.operations WHERE position_id=:position_id
+          AND capability IN ('CV_PROCESSING','ASSESSMENT','RANKING')
+          AND status IN ('PENDING','PROCESSING') LIMIT 1
+    """), {"position_id": position_id}).first() or db.execute(text("""
+        SELECT 1 FROM app_private.application_documents d
+        JOIN app_private.applications a ON a.application_id=d.application_id
+        WHERE a.position_id=:position_id AND d.file_processing_status IN ('RECEIVED','PROCESSING') LIMIT 1
+    """), {"position_id": position_id}).first():
+        raise RetentionError("Vị trí còn tác vụ hoặc tài liệu đang xử lý; chưa thể xóa", status_code=409)
 
 def _has_global_role(db, user_id: str, roles: tuple[str, ...]) -> bool:
     return db.execute(text("""
@@ -300,13 +385,14 @@ def generate_retention_cases(db, *, position_id: str, actor_user_id: str) -> dic
 
 
 def confirm_retention_case(db, *, case_id: str, actor_user_id: str) -> dict:
-    case = get_case(db, case_id, for_update=True)
+    case, position = _lock_case_and_position(db, case_id)
     if case["status"] == "DELETED":
         raise RetentionError("Retention case đã được xóa dữ liệu", status_code=409)
     if case["status"] == "CANCELLED":
         raise RetentionError("Retention case đã bị hủy", status_code=409)
     if _as_utc(case["due_date"]) > _now():
         raise RetentionError("Retention case chưa đến hạn xóa", status_code=422)
+    _require_original_closure(case, position)
     if case["status"] == "PENDING":
         db.execute(text("""
             UPDATE app_private.application_retention_cases
@@ -346,9 +432,14 @@ def confirm_retention_case(db, *, case_id: str, actor_user_id: str) -> dict:
 
 
 def cancel_retention_case(db, *, case_id: str, actor_user_id: str) -> dict:
-    case = get_case(db, case_id, for_update=True)
+    case, _ = _lock_case_and_position(db, case_id)
     if case["status"] == "DELETED":
         raise RetentionError("Retention case đã được xóa dữ liệu", status_code=409)
+    if db.execute(text("""
+        SELECT 1 FROM app_private.deletion_jobs
+        WHERE retention_case_id=:id AND status='PROCESSING' LIMIT 1
+    """), {"id": case_id}).first():
+        raise RetentionError("Case đang xóa hoặc cần đối soát phục hồi; không thể hủy", status_code=409)
     if case["status"] != "CANCELLED":
         db.execute(text("""
             UPDATE app_private.application_retention_cases
@@ -368,21 +459,21 @@ def cancel_retention_case(db, *, case_id: str, actor_user_id: str) -> dict:
     return public_case(get_case(db, case_id))
 
 
-def _mark_job_failed(case: dict, job_id: str | None, actor_user_id: str, error_type: str) -> None:
+def _mark_recovery_required(case: dict, job_id: str, actor_user_id: str, error_type: str) -> None:
+    """Best effort diagnostic; the already committed PROCESSING fence stays put."""
     db = SessionLocal()
     try:
-        if job_id:
+        current, _ = _lock_case_and_position(db, str(case["retention_case_id"]))
+        if current["status"] == "SCHEDULED_FOR_DELETION":
             db.execute(text("""
-                UPDATE app_private.deletion_jobs
-                SET status = 'FAILED', error = :error, completed_at = NOW()
-                WHERE job_id = :job_id
-            """), {"job_id": job_id, "error": f"RETENTION_EXECUTION_FAILED:{error_type}"})
-        _audit(db, actor_user_id=actor_user_id, action="EXECUTE_RETENTION_DELETION", case=case,
-               outcome="FAILED", metadata={
-                   "application_opaque_id": case.get("application_opaque_id"),
-                   "policy_version": case.get("policy_version"), "error_type": error_type,
-               })
-        db.commit()
+                UPDATE app_private.deletion_jobs SET error=:error
+                WHERE job_id=:job_id AND status='PROCESSING'
+            """), {"job_id": job_id, "error": f"RECOVERY_REQUIRED:{error_type}"})
+            _audit(db, actor_user_id=actor_user_id, action="EXECUTE_RETENTION_DELETION", case=case,
+                   outcome="FAILED", metadata={"application_opaque_id": case.get("application_opaque_id"),
+                                               "policy_version": case.get("policy_version"),
+                                               "error_type": error_type, "recovery_required": True})
+            db.commit()
     except Exception:
         db.rollback()
     finally:
@@ -393,21 +484,26 @@ def _count(db, sql: str, params: dict) -> int:
     return int(db.execute(text(sql), params).scalar_one() or 0)
 
 
-def execute_retention_case(*, case_id: str, actor_user_id: str) -> dict:
-    """Execute one confirmed, due retention case.
+def execute_retention_case(*, case_id: str, actor_user_id: str, recovery: bool = False) -> dict:
+    """Execute once, or resume a fenced job only after explicit operator review.
 
-    Storage deletion happens before the database purge.  If storage fails, no
-    candidate database rows are deleted.  If the database purge fails after
-    files were removed, the job is marked FAILED and a retry treats missing
-    files as already absent.
+    PROCESSING is committed before storage is touched. It remains a durable
+    fence on errors/crash; normal execute cannot implicitly retry uncertain I/O.
+    Storage and PostgreSQL are still not an atomic transaction.
     """
     job_id: str | None = None
     case_snapshot: dict | None = None
-
+    fenced = False
+    guard = SessionLocal()
     db = SessionLocal()
     try:
-        case = get_case(db, case_id, for_update=True)
-        case_snapshot = case
+        # A separate transaction-scoped lock spans both data transactions. If
+        # this connection dies, the durable fence remains; explicit recovery
+        # requires an operator to stop the old executor and settle provider I/O.
+        acquired = guard.execute(text("SELECT pg_try_advisory_xact_lock(hashtextextended(:id, 741936))"), {"id": case_id}).scalar_one()
+        if not acquired:
+            raise RetentionError("Case đang được xử lý; không chạy đồng thời", status_code=409)
+        case = get_case(db, case_id)
         if case["status"] == "DELETED":
             job = db.execute(text("""
                 SELECT result_summary FROM app_private.deletion_jobs
@@ -417,41 +513,66 @@ def execute_retention_case(*, case_id: str, actor_user_id: str) -> dict:
             return {"retention_case_id": case_id,
                     "application_opaque_id": case.get("application_opaque_id"),
                     "status": "DELETED", "result_summary": job["result_summary"] if job else {}}
-        if case["status"] != "SCHEDULED_FOR_DELETION":
-            raise RetentionError("Retention case chưa được xác nhận xóa", status_code=409)
-        if not case.get("application_id"):
-            raise RetentionError("Retention case không còn application để xóa", status_code=409)
+        case, position = _lock_case_and_position(db, case_id)
+        case_snapshot = case
+        # The case may have completed while the position lock was awaited.
+        if case["status"] == "DELETED":
+            job = db.execute(text("""
+                SELECT result_summary FROM app_private.deletion_jobs
+                WHERE retention_case_id=:case_id AND status='COMPLETED'
+                ORDER BY created_at DESC LIMIT 1
+            """), {"case_id": case_id}).mappings().first()
+            return {"retention_case_id": case_id, "application_opaque_id": case.get("application_opaque_id"),
+                    "status": "DELETED", "result_summary": job["result_summary"] if job else {}}
+        if case["status"] != "SCHEDULED_FOR_DELETION" or not case.get("application_id"):
+            raise RetentionError("Retention case chưa được xác nhận hoặc không còn application", status_code=409)
         if _as_utc(case["due_date"]) > _now():
             raise RetentionError("Retention case chưa đến hạn xóa", status_code=409)
+        _require_original_closure(case, position)
+        _require_no_active_processing(db, str(case["position_id"]))
+        if db.execute(text("""
+            SELECT 1 FROM app_private.deletion_jobs j
+            JOIN app_private.application_retention_cases c ON c.retention_case_id=j.retention_case_id
+            WHERE c.position_id=:position AND c.retention_case_id<>:case_id
+              AND j.status='PROCESSING' LIMIT 1
+        """), {"position": str(case["position_id"]), "case_id": case_id}).first():
+            raise RetentionError("Vị trí có case xóa khác đang xử lý hoặc cần phục hồi", status_code=409)
+        application_id = str(case["application_id"])
+        params = {"application_id": application_id}
+        _guard_share_level_text(db, application_id)
         latest_job = db.execute(text("""
             SELECT job_id, status FROM app_private.deletion_jobs
-            WHERE retention_case_id = :case_id
-            ORDER BY created_at DESC LIMIT 1
+            WHERE retention_case_id=:case_id ORDER BY created_at DESC LIMIT 1
         """), {"case_id": case_id}).mappings().first()
-        if latest_job and latest_job["status"] in ("PENDING", "PROCESSING"):
+        if latest_job and latest_job["status"] == "PROCESSING":
+            if not recovery:
+                raise RetentionError("Case cần đối soát phục hồi trước khi thử lại", status_code=409)
             job_id = str(latest_job["job_id"])
-            db.execute(text("""
-                UPDATE app_private.deletion_jobs SET status = 'PROCESSING', error = NULL, completed_at = NULL
-                WHERE job_id = :job_id
-            """), {"job_id": job_id})
+            _audit(db, actor_user_id=actor_user_id, action="RECOVER_RETENTION_DELETION", case=case,
+                   outcome="RETRY", metadata={"application_opaque_id": case.get("application_opaque_id"),
+                                               "policy_version": case.get("policy_version")})
         else:
-            job_id = str(db.execute(text("""
-                INSERT INTO app_private.deletion_jobs (retention_case_id, application_opaque_id, status)
-                VALUES (:case_id, :opaque_id, 'PROCESSING') RETURNING job_id
-            """), {"case_id": case_id, "opaque_id": case.get("application_opaque_id")}).scalar_one())
+            if recovery:
+                raise RetentionError("Case không có job cần phục hồi", status_code=409)
+            if latest_job and latest_job["status"] == "PENDING":
+                job_id = str(latest_job["job_id"])
+                db.execute(text("UPDATE app_private.deletion_jobs SET status='PROCESSING', error=NULL, completed_at=NULL WHERE job_id=:job_id"), {"job_id": job_id})
+            else:
+                job_id = str(db.execute(text("""
+                    INSERT INTO app_private.deletion_jobs (retention_case_id, application_opaque_id, status)
+                    VALUES (:case_id, :opaque_id, 'PROCESSING') RETURNING job_id
+                """), {"case_id": case_id, "opaque_id": case.get("application_opaque_id")}).scalar_one())
         db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+        fenced = True
 
-    assert case_snapshot is not None and job_id is not None
-    application_id = str(case_snapshot["application_id"])
-    params = {"application_id": application_id}
-
-    db = SessionLocal()
-    try:
+        # Reacquire all row locks and repeat guards after the fence commit. No
+        # storage access occurs before these checks and the durable fence.
+        case, position = _lock_case_and_position(db, case_id)
+        if case["status"] != "SCHEDULED_FOR_DELETION" or str(case.get("application_id")) != application_id:
+            raise RetentionError("Retention case đã thay đổi trước khi xóa", status_code=409)
+        _require_original_closure(case, position)
+        _require_no_active_processing(db, str(case["position_id"]))
+        _guard_share_level_text(db, application_id)
         originals = [dict(row) for row in db.execute(text("""
             SELECT bucket, storage_path FROM app_private.application_documents
             WHERE application_id = :application_id
@@ -462,22 +583,7 @@ def execute_retention_case(*, case_id: str, actor_user_id: str) -> dict:
             JOIN app_private.application_documents d ON d.document_id = pr.document_id
             WHERE d.application_id = :application_id AND pr.extracted_text_storage_path IS NOT NULL
         """), params).all()]
-    finally:
-        db.close()
-
-    try:
         storage_summary = delete_storage_objects(originals, extracted_paths)
-    except Exception as exc:
-        _mark_job_failed(case_snapshot, job_id, actor_user_id, type(exc).__name__)
-        if isinstance(exc, RetentionError):
-            raise
-        raise RetentionError("Không thể xóa dữ liệu trên storage", status_code=502) from exc
-
-    db = SessionLocal()
-    try:
-        case = get_case(db, case_id, for_update=True)
-        if case["status"] != "SCHEDULED_FOR_DELETION" or str(case.get("application_id")) != application_id:
-            raise RetentionError("Retention case đã thay đổi trước khi xóa", status_code=409)
         counts = {
             "documents": _count(db, "SELECT COUNT(*) FROM app_private.application_documents WHERE application_id=:application_id", params),
             "document_processing_runs": _count(db, """
@@ -515,6 +621,12 @@ def execute_retention_case(*, case_id: str, actor_user_id: str) -> dict:
         }
 
         db.execute(text("DELETE FROM app_private.shortlist_feedback WHERE application_id=:application_id"), params)
+        # Prevent new unscoped comments on a share whose historical membership
+        # is no longer visible. Existing comments were checked before storage.
+        db.execute(text("""
+            UPDATE app_private.shortlist_shares SET share_level_feedback_blocked=TRUE
+            WHERE share_id IN (SELECT share_id FROM app_private.shortlist_share_items WHERE application_id=:application_id)
+        """), params)
         db.execute(text("DELETE FROM app_private.shortlist_share_items WHERE application_id=:application_id"), params)
         db.execute(text("DELETE FROM app_private.ranking_items WHERE application_id=:application_id"), params)
         db.execute(text("DELETE FROM app_private.duplicate_signals WHERE application_id_1=:application_id OR application_id_2=:application_id"), params)
@@ -571,9 +683,11 @@ def execute_retention_case(*, case_id: str, actor_user_id: str) -> dict:
                 "status": "DELETED", "result_summary": summary}
     except Exception as exc:
         db.rollback()
-        _mark_job_failed(case_snapshot, job_id, actor_user_id, type(exc).__name__)
+        if fenced and case_snapshot is not None and job_id is not None:
+            _mark_recovery_required(case_snapshot, job_id, actor_user_id, type(exc).__name__)
         if isinstance(exc, RetentionError):
             raise
         raise RetentionError("Không thể hoàn tất xóa dữ liệu ứng viên", status_code=500) from exc
     finally:
         db.close()
+        guard.close()

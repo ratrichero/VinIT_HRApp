@@ -1,5 +1,7 @@
 # Plan triển khai chi tiết — Phase 2 Batch đầu: Workflow cốt lõi
 
+> **Lưu ý đối chiếu sau lập plan:** migration `00013` đã được dùng cho direct criteria approval và `00014` đã được dành trong repo cho retention/shared feedback; không dùng lại các số này cho Workflow Core. Kiểm tra local/remote và chọn số trống tiếp theo nếu batch được duyệt. Luồng direct approval đã được người dùng xác nhận: nội dung D-04 và các câu mô tả chỉ dual approval bên dưới là đề xuất cũ, cần cập nhật khi chốt D-04 để bảo toàn cả hai luồng hiện hành. Plan và D-01…D-10 vẫn chưa được duyệt. Xem [`PHASE1_REMAINING_EXECUTION_PLAN.md`](PHASE1_REMAINING_EXECUTION_PLAN.md).
+
 > Ngày lập plan: 2026-11-07  
 > Branch: `arena/ea6e2570-vinit-hrapp`  
 > Trạng thái: **PLAN CHI TIẾT BATCH ĐẦU — CHỜ DUYỆT ĐỂ TRIỂN KHAI**  

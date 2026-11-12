@@ -105,3 +105,41 @@ def test_supabase_storage_errors_are_sanitised(monkeypatch):
 
     assert raised.value.status_code == 502
     assert "secret" not in raised.value.detail and "cv.docx" not in raised.value.detail
+
+
+@pytest.mark.parametrize("status,closed", [
+    ("OPEN", None),
+    ("CLOSED", datetime(2024, 1, 2, tzinfo=timezone.utc)),
+    ("CLOSED", None),
+])
+def test_original_closure_guard_rejects_changed_position(status, closed):
+    from app.services.retention import _require_original_closure
+    case = {"position_closed_at": datetime(2024, 1, 1, tzinfo=timezone.utc)}
+    with pytest.raises(RetentionError) as exc:
+        _require_original_closure(case, {"status": status, "closed_at": closed})
+    assert exc.value.status_code == 409
+
+
+def test_original_closure_guard_accepts_same_instant():
+    from datetime import timedelta
+    from app.services.retention import _require_original_closure
+    original = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    _require_original_closure({"position_closed_at": original}, {"status": "CLOSED", "closed_at": original.astimezone(timezone(timedelta(hours=7)))})
+
+
+def test_share_level_feedback_guard_blocks_before_purge():
+    from app.services.retention import _guard_share_level_text
+    class Result:
+        def all(self): return []
+        def scalar_one(self): return True
+    class DB:
+        queries = []
+        def execute(self, statement, params):
+            self.queries.append(str(statement))
+            return Result()
+    db = DB()
+    with pytest.raises(RetentionError) as exc:
+        _guard_share_level_text(db, "application-id")
+    assert exc.value.status_code == 409
+    assert "FOR UPDATE" in db.queries[0] and "FOR UPDATE OF s" in db.queries[1]
+    assert "f.application_id IS NULL" in db.queries[2]

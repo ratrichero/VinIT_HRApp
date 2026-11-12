@@ -1795,7 +1795,8 @@ def test_retention_execute_does_not_delete_database_records_when_storage_fails(c
             SELECT status, error FROM app_private.deletion_jobs
             WHERE retention_case_id = :id ORDER BY created_at DESC LIMIT 1
         """), {"id": case_id}).mappings().one()
-        assert job["status"] == "FAILED" and "outside.docx" not in (job["error"] or "")
+        assert job["status"] == "PROCESSING" and "outside.docx" not in (job["error"] or "")
+        assert (job["error"] or "").startswith("RECOVERY_REQUIRED:")
 
 
 def test_cancelled_retention_case_can_be_regenerated_without_duplicating_open_cases(client, seed):
@@ -1829,3 +1830,266 @@ def test_cancelled_retention_case_can_be_regenerated_without_duplicating_open_ca
     listed = client.get(f"/v1/retention/positions/{seed['pos']}/cases", headers=headers(seed["hr"]))
     assert listed.status_code == 200
     assert sorted(case["status"] for case in listed.json()) == ["CANCELLED", "PENDING"]
+
+
+def _due_retention_case(client, seed, confirm=False):
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.positions SET status='CLOSED', closed_at=NOW()-INTERVAL '13 months' WHERE position_id=:id"), {"id": seed["pos"]})
+        conn.execute(text("INSERT INTO app_private.position_access_grants(position_id,user_id,permission_code) VALUES (:pos,:user,'CONFIRM_DELETION') ON CONFLICT DO NOTHING"), {"pos": seed["pos"], "user": seed["hr"]})
+    response = client.post(f"/v1/retention/positions/{seed['pos']}/cases/generate", headers=headers(seed["hr"]))
+    assert response.status_code == 200, response.text
+    case = response.json()["cases"][0]["retention_case_id"]
+    if confirm:
+        response = client.post(f"/v1/retention/cases/{case}/confirm", headers=headers(seed["hr"]), json={})
+        assert response.status_code == 200, response.text
+    return case
+
+
+@pytest.mark.parametrize("action", ["confirm", "execute"])
+@pytest.mark.parametrize("change", ["reopened", "reclosed"])
+def test_retention_rejects_changed_closure_before_storage(client, seed, monkeypatch, action, change):
+    import app.services.retention as retention
+    case = _due_retention_case(client, seed, confirm=action == "execute")
+    reopened = client.patch(f"/v1/positions/{seed['pos']}", headers=headers(seed["hr"]), json={"status": "OPEN"})
+    assert reopened.status_code == 200, reopened.text
+    if change == "reclosed":
+        closed = client.patch(f"/v1/positions/{seed['pos']}", headers=headers(seed["hr"]), json={"status": "CLOSED"})
+        assert closed.status_code == 200, closed.text
+    calls = []
+    monkeypatch.setattr(retention, "delete_storage_objects", lambda *args: calls.append(args))
+    result = client.post(f"/v1/retention/cases/{case}/{action}", headers=headers(seed["hr"]), json={})
+    assert result.status_code == 409, result.text
+    assert not calls
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM app_private.applications WHERE application_id=:id"), {"id": seed["app"]}).scalar_one() == 1
+
+
+@pytest.mark.parametrize("field", ["feedback", "note"])
+def test_retention_blocks_shared_text_without_deleting_other_candidates(client, seed, monkeypatch, field):
+    import app.services.retention as retention
+    other_app = uid()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.applications(application_id, position_id, created_by) VALUES (:id,:pos,:hr)"), {"id": other_app, "pos": seed["pos"], "hr": seed["hr"]})
+        share = conn.execute(text("INSERT INTO app_private.shortlist_shares(position_id,created_by,shared_with,note) VALUES (:pos,:hr,:hm,:note) RETURNING share_id"), {"pos": seed["pos"], "hr": seed["hr"], "hm": seed["hm"], "note": "shared note" if field == "note" else None}).scalar_one()
+        for app_id in (seed["app"], other_app):
+            conn.execute(text("INSERT INTO app_private.shortlist_share_items(share_id,position_id,application_id) VALUES (:share,:pos,:app)"), {"share": share, "pos": seed["pos"], "app": app_id})
+        if field == "feedback":
+            conn.execute(text("INSERT INTO app_private.shortlist_feedback(share_id,application_id,feedback_from,content) VALUES (:share,NULL,:hm,'shared feedback')"), {"share": share, "hm": seed["hm"]})
+    case = _due_retention_case(client, seed, confirm=True)
+    calls = []
+    monkeypatch.setattr(retention, "delete_storage_objects", lambda *args: calls.append(args))
+    response = client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"]))
+    assert response.status_code == 409, response.text
+    assert not calls
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM app_private.shortlist_share_items WHERE share_id=:id"), {"id": share}).scalar_one() == 2
+        assert conn.execute(text("SELECT COUNT(*) FROM app_private.applications WHERE application_id IN (:a,:b)"), {"a": seed["app"], "b": other_app}).scalar_one() == 2
+        if field == "feedback":
+            assert conn.execute(text("SELECT COUNT(*) FROM app_private.shortlist_feedback WHERE share_id=:id AND application_id IS NULL"), {"id": share}).scalar_one() == 1
+
+
+def test_retention_locks_reopen_cancel_and_feedback_during_storage(client, seed, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from sqlalchemy.exc import DBAPIError
+    import app.services.retention as retention
+    with engine.begin() as conn:
+        share = conn.execute(text("INSERT INTO app_private.shortlist_shares(position_id,created_by,shared_with) VALUES (:pos,:hr,:hm) RETURNING share_id"), {"pos": seed["pos"], "hr": seed["hr"], "hm": seed["hm"]}).scalar_one()
+        conn.execute(text("INSERT INTO app_private.shortlist_share_items(share_id,position_id,application_id) VALUES (:share,:pos,:app)"), {"share": share, "pos": seed["pos"], "app": seed["app"]})
+    case = _due_retention_case(client, seed, confirm=True)
+    entered, release = Event(), Event()
+    def delete(*_):
+        entered.set()
+        assert release.wait(10)
+        return {"storage_objects_deleted": 0, "storage_objects_missing": 0}
+    monkeypatch.setattr(retention, "delete_storage_objects", delete)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(retention.execute_retention_case, case_id=case, actor_user_id=seed["hr"])
+        try:
+            assert entered.wait(10)
+            for sql, params in [
+                ("UPDATE app_private.positions SET status='OPEN',closed_at=NULL WHERE position_id=:id", {"id": seed["pos"]}),
+                ("UPDATE app_private.application_retention_cases SET status='CANCELLED' WHERE retention_case_id=:id", {"id": case}),
+                ("SELECT share_id FROM app_private.shortlist_shares WHERE share_id=:id FOR UPDATE", {"id": share}),
+            ]:
+                with pytest.raises(DBAPIError):
+                    with engine.begin() as conn:
+                        conn.execute(text("SET LOCAL lock_timeout='200ms'"))
+                        conn.execute(text(sql), params)
+        finally:
+            release.set()
+        assert future.result(timeout=10)["status"] == "DELETED"
+
+
+def test_duplicate_signal_read_is_hr_only_and_position_scoped(client, seed):
+    second = uid()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.applications(application_id,position_id,created_by) VALUES (:id,:pos,:hr)"), {"id": second, "pos": seed["pos"], "hr": seed["hr"]})
+        for one, two in ((seed["app"], second), (seed["app"], seed["app2"])):
+            conn.execute(text("INSERT INTO app_private.duplicate_signals(position_id,application_id_1,application_id_2,signal_type,confidence) VALUES (:pos,:one,:two,'EMAIL_MATCH',0.98)"), {"pos": seed["pos"], "one": one, "two": two})
+    url = f"/v1/positions/{seed['pos']}/duplicate-signals"
+    response = client.get(url, headers=headers(seed["hr"]))
+    assert response.status_code == 200, response.text
+    assert len(response.json()) == 1
+    assert {response.json()[0]["application_id_1"], response.json()[0]["application_id_2"]} == {seed["app"], second}
+    for user in ("hm", "other", "hr2"):
+        assert client.get(url, headers=headers(seed[user])).status_code == 403
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.position_assignments SET revoked_at=NOW() WHERE position_id=:pos AND user_id=:hr"), {"pos": seed["pos"], "hr": seed["hr"]})
+    assert client.get(url, headers=headers(seed["hr"])).status_code == 403
+
+
+def test_retention_recovery_after_partial_storage_failure(client, seed, monkeypatch, tmp_path):
+    import app.services.retention as retention
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(settings, "LOCAL_STORAGE_PATH", str(tmp_path))
+    case = _due_retention_case(client, seed, confirm=True)
+    original = tmp_path / "cv-originals" / "case" / "sample.pdf"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"synthetic")
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO app_private.application_documents
+            (application_id,bucket,storage_path,original_filename,mime_type,size_bytes,file_processing_status)
+            VALUES (:app,'cv-originals','case/sample.pdf','sample.pdf','application/pdf',9,'COMPLETED')"""), {"app": seed["app"]})
+    real_delete = retention.delete_storage_objects
+    def partial(*args):
+        real_delete(*args)
+        raise retention.RetentionError("simulated storage failure", 502)
+    monkeypatch.setattr(retention, "delete_storage_objects", partial)
+    result = client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"]))
+    assert result.status_code == 502, result.text
+    assert not original.exists()
+    listing = client.get(f"/v1/retention/positions/{seed['pos']}/cases", headers=headers(seed["hr"]))
+    assert listing.json()[0]["execution_status"] == "PROCESSING"
+    assert client.patch(f"/v1/positions/{seed['pos']}", headers=headers(seed["hr"]), json={"status":"OPEN"}).status_code == 409
+    assert client.post(f"/v1/retention/cases/{case}/cancel", headers=headers(seed["hr"]), json={}).status_code == 409
+    assert client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"])).status_code == 409
+    url = f"/v1/retention/cases/{case}/recover"
+    assert client.post(url, headers=headers(seed["hr"]), json={}).status_code == 422
+    assert client.post(url, headers=headers(seed["hm"]), json={"confirmation":"EXECUTOR_STOPPED_AND_STORAGE_SETTLED"}).status_code == 403
+    monkeypatch.setattr(retention, "delete_storage_objects", real_delete)
+    recovered = client.post(url, headers=headers(seed["hr"]), json={"confirmation":"EXECUTOR_STOPPED_AND_STORAGE_SETTLED"})
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["status"] == "DELETED"
+    assert recovered.json()["result_summary"]["storage_objects_missing"] == 1
+    assert client.patch(f"/v1/positions/{seed['pos']}", headers=headers(seed["hr"]), json={"status":"OPEN"}).status_code == 200
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM app_private.audit_events WHERE action_type='RECOVER_RETENTION_DELETION' AND object_id=:id"), {"id": case}).scalar_one() == 1
+
+
+def test_retention_connection_loss_keeps_fence(client, seed, monkeypatch):
+    import app.services.retention as retention
+    case = _due_retention_case(client, seed, confirm=True)
+    def kill_database_connection(*_):
+        with engine.begin() as conn:
+            pids = conn.execute(text("""SELECT pid FROM pg_stat_activity WHERE datname=current_database()
+                AND pid <> pg_backend_pid() AND state='idle in transaction'
+                AND query LIKE '%SELECT pr.extracted_text_storage_path%'""")).scalars().all()
+            assert len(pids) == 1
+            conn.execute(text("SELECT pg_terminate_backend(:pid)"), {"pid": pids[0]})
+        return {"storage_objects_deleted": 0, "storage_objects_missing": 0}
+    monkeypatch.setattr(retention, "delete_storage_objects", kill_database_connection)
+    result = client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"]))
+    assert result.status_code == 500, result.text
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT status FROM app_private.deletion_jobs WHERE retention_case_id=:id ORDER BY created_at DESC LIMIT 1"), {"id":case}).scalar_one() == "PROCESSING"
+        assert conn.execute(text("SELECT COUNT(*) FROM app_private.applications WHERE application_id=:id"), {"id":seed["app"]}).scalar_one() == 1
+    assert client.patch(f"/v1/positions/{seed['pos']}", headers=headers(seed["hr"]), json={"status":"OPEN"}).status_code == 409
+    assert client.post(f"/v1/retention/cases/{case}/cancel", headers=headers(seed["hr"]), json={}).status_code == 409
+
+
+def test_retention_blocks_active_operations_before_storage(client, seed, monkeypatch):
+    import app.services.retention as retention
+    case = _due_retention_case(client, seed, confirm=True)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.operations(position_id,capability,requested_by,status) VALUES (:pos,'CV_PROCESSING',:hr,'PENDING')"), {"pos":seed["pos"], "hr":seed["hr"]})
+    calls = []
+    monkeypatch.setattr(retention, "delete_storage_objects", lambda *_: calls.append(True))
+    result = client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"]))
+    assert result.status_code == 409 and not calls
+    assert client.post(f"/v1/retention/cases/{case}/cancel", headers=headers(seed["hr"]), json={}).status_code == 200
+
+
+def test_retention_blocks_new_general_feedback_after_purge(client, seed, monkeypatch):
+    import app.services.retention as retention
+    other_app = uid()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.applications(application_id,position_id,created_by) VALUES (:id,:pos,:hr)"), {"id":other_app, "pos":seed["pos"], "hr":seed["hr"]})
+        share = conn.execute(text("INSERT INTO app_private.shortlist_shares(position_id,created_by,shared_with) VALUES (:pos,:hr,:hm) RETURNING share_id"), {"pos":seed["pos"], "hr":seed["hr"], "hm":seed["hm"]}).scalar_one()
+        for application in (seed["app"], other_app):
+            conn.execute(text("INSERT INTO app_private.shortlist_share_items(share_id,position_id,application_id) VALUES (:share,:pos,:app)"), {"share":share, "pos":seed["pos"], "app":application})
+    case = _due_retention_case(client, seed, confirm=True)
+    monkeypatch.setattr(retention, "delete_storage_objects", lambda *_: {"storage_objects_deleted":0, "storage_objects_missing":0})
+    result = client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"]))
+    assert result.status_code == 200, result.text
+    detail = client.get(f"/v1/shortlist/{share}", headers=headers(seed["hm"]))
+    assert detail.status_code == 200 and detail.json()["share_level_feedback_blocked"] is True
+    url = f"/v1/shortlist/{share}/feedback"
+    assert client.post(url, headers=headers(seed["hm"]), json={"content":"shared"}).status_code == 409
+    specific = client.post(url, headers=headers(seed["hm"]), json={"content":"remaining candidate", "application_id":other_app})
+    assert specific.status_code == 201, specific.text
+
+
+def test_retention_recovery_rejects_live_executor(client, seed, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    import app.services.retention as retention
+    case = _due_retention_case(client, seed, confirm=True)
+    entered, release = Event(), Event()
+    def delete(*_):
+        entered.set()
+        assert release.wait(10)
+        return {"storage_objects_deleted": 0, "storage_objects_missing": 0}
+    monkeypatch.setattr(retention, "delete_storage_objects", delete)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(retention.execute_retention_case, case_id=case, actor_user_id=seed["hr"])
+        try:
+            assert entered.wait(10)
+            result = client.post(f"/v1/retention/cases/{case}/recover", headers=headers(seed["hr"]),
+                                 json={"confirmation":"EXECUTOR_STOPPED_AND_STORAGE_SETTLED"})
+            assert result.status_code == 409, result.text
+        finally:
+            release.set()
+        assert future.result(timeout=10)["status"] == "DELETED"
+
+
+def test_duplicate_identity_detector_phone_and_missing_values():
+    from app.services.matching import matching_engine
+    apps = [
+        {"application_id": "a", "identity": {"email": None, "phone": "0123000000"}},
+        {"application_id": "b", "identity": {"email": "", "phone": "0123000000"}},
+        {"application_id": "c", "identity": {"email": None, "phone": None}},
+        {"application_id": "d", "identity": {"email": "", "phone": ""}},
+    ]
+    assert matching_engine.detect_duplicates(apps) == [("a", "b", .95, "PHONE_MATCH")]
+
+
+def test_retention_crash_leaves_durable_fence_without_diagnostic(client, seed, monkeypatch):
+    import app.services.retention as retention
+    case = _due_retention_case(client, seed, confirm=True)
+    def crash(*_):
+        raise SystemExit("simulated process death")
+    monkeypatch.setattr(retention, "delete_storage_objects", crash)
+    with pytest.raises(SystemExit):
+        retention.execute_retention_case(case_id=case, actor_user_id=seed["hr"])
+    with engine.connect() as conn:
+        job = conn.execute(text("SELECT status,error FROM app_private.deletion_jobs WHERE retention_case_id=:id ORDER BY created_at DESC LIMIT 1"), {"id":case}).mappings().one()
+        assert job["status"] == "PROCESSING" and job["error"] is None
+    assert client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"])).status_code == 409
+    assert client.patch(f"/v1/positions/{seed['pos']}", headers=headers(seed["hr"]), json={"status":"OPEN"}).status_code == 409
+
+
+def test_retention_fence_blocks_feedback_and_new_work_after_failure(client, seed, monkeypatch):
+    import app.services.retention as retention
+    with engine.begin() as conn:
+        share = conn.execute(text("INSERT INTO app_private.shortlist_shares(position_id,created_by,shared_with) VALUES (:pos,:hr,:hm) RETURNING share_id"), {"pos":seed["pos"], "hr":seed["hr"], "hm":seed["hm"]}).scalar_one()
+        conn.execute(text("INSERT INTO app_private.shortlist_share_items(share_id,position_id,application_id) VALUES (:share,:pos,:app)"), {"share":share, "pos":seed["pos"], "app":seed["app"]})
+    case = _due_retention_case(client, seed, confirm=True)
+    def fail(*_):
+        raise retention.RetentionError("synthetic", 502)
+    monkeypatch.setattr(retention, "delete_storage_objects", fail)
+    assert client.post(f"/v1/retention/cases/{case}/execute", headers=headers(seed["hr"])).status_code == 502
+    assert client.post(f"/v1/shortlist/{share}/feedback", headers=headers(seed["hm"]), json={"content":"shared"}).status_code == 409
+    assert client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed["hr"])).status_code == 409
+    assert client.post("/v1/shortlist/share", headers=headers(seed["hr"]), json={"position_id":seed["pos"], "shared_with_user_id":seed["hm"], "application_ids":[seed["app"]]}).status_code == 409

@@ -58,6 +58,7 @@ interface ShortlistShare {
   direction?: 'sent' | 'received';
   recipient_profile?: { display_name?: string };
   allow_cv_view?: boolean;
+  share_level_feedback_blocked?: boolean;
   status?: string;
   created_at?: string;
   note?: string;
@@ -356,7 +357,10 @@ export default function ShortlistPage() {
                     )}
                   </Box>
 
-                  {selectedShare.status === 'ACTIVE' && (
+                  {selectedShare.status === 'ACTIVE' && selectedShare.share_level_feedback_blocked && (
+                    <Alert severity="info" sx={{ mt: 2 }}>{t("Shortlist đã thay đổi do retention; hãy yêu cầu HR tạo shortlist mới để gửi phản hồi chung")}</Alert>
+                  )}
+                  {selectedShare.status === 'ACTIVE' && !selectedShare.share_level_feedback_blocked && (
                     <Box sx={{ mt: 2 }}>
                       <TextField
                         label={t("Phản hồi của bạn")}
@@ -375,7 +379,7 @@ export default function ShortlistPage() {
             </DialogContent>
             <DialogActions>
               <Button onClick={handleCloseDetail}>{t("Đóng")}</Button>
-              {selectedShare.status === 'ACTIVE' && (
+              {selectedShare.status === 'ACTIVE' && !selectedShare.share_level_feedback_blocked && (
                 <Button
                   variant="contained"
                   color="secondary"

@@ -414,3 +414,13 @@ Sau mỗi batch, dev thực hiện phải bổ sung:
 3. Lệnh test đã chạy và kết quả.
 4. Commit hash sau khi push.
 5. Blocker còn lại và người/điều kiện cần để mở khóa.
+
+## 11. Hardening retention/shortlist và xem duplicate cùng vị trí
+
+- Theo yêu cầu tiếp tục ba mục ưu tiên: confirm/execute kiểm tra position vẫn `CLOSED` và `closed_at` bằng snapshot; lock position trước case; cancel/reopen và xử lý đồng thời tuân theo fence. Chặn xóa nếu còn operation/tài liệu đang xử lý.
+- Trước thao tác storage, commit `deletion_jobs.PROCESSING` làm hàng rào bền vững. Không tự retry khi kết quả chưa chắc chắn; recovery thủ công yêu cầu xác nhận executor cũ đã dừng và storage I/O đã ổn định, có RBAC và audit. `doc/RETENTION_RECOVERY_RUNBOOK.md` nêu điều kiện dừng, đối soát, giới hạn storage không atomic, quy trình không tiếp tục xóa, và yêu cầu drain phiên bản cũ. Không coi cờ/lock là chứng minh request provider đã dừng.
+- Không purge khi share đang liên kết chứa note/feedback chung; không tự xóa nội dung chung. Migration mới `00014_retention_shared_feedback_guard.sql` (chỉ repo/local test, chưa áp project kết nối) thêm cờ không định danh ngăn feedback chung mới vào share sau purge; UI báo yêu cầu HR tạo share mới. Văn bản tự do và lịch sử đã purge trước guard vẫn cần HR/Privacy quyết định/kiểm kê.
+- API/UI chỉ xem các tín hiệu duplicate có sẵn cùng position; HR phụ trách, HR Lead/Admin được phép, HM/outsider bị từ chối; không thêm cross-position, merge/xóa hoặc xác nhận/bác bỏ. Tín hiệu có thể cũ.
+- Local PostgreSQL 16 + pgvector dùng một lần: migrations `00001`–`00014`, full backend **246 passed**. Package `pgserver` cục bộ chỉ có stub `pgcrypto`/`uuid-ossp`, nên test tạo hàm `digest(text,'sha256')` dùng SHA-256 built-in của PostgreSQL và stub UUID; kết quả không chứng minh extension pgcrypto thực. CI PostgreSQL/pgvector riêng sẽ xác nhận lại với extension thật. Test có mô phỏng xóa một phần, mất kết nối DB thật bằng terminate backend, crash process, retry có xác nhận, tranh chấp lock, shared feedback và RBAC.
+- Backend unit không DB trước bổ sung test cuối: **162 passed, 80 skipped**; Ruff phạm vi CI đạt. Frontend type-check, lint, unit 3/3, i18n 3/3 và production build đạt.
+- Chuẩn bị song song: `doc/PHASE1_OPERATIONS_DECISION_CHECKLIST.md` liệt kê owner/đầu ra DevOps, HR/Privacy/Legal, HR/HM; tất cả còn chờ xác nhận thực tế. Không chạy E2E, không thay dữ liệu VPS/Supabase, không bật AI/automation, không đổi manifest/rules. DEP-02 vẫn partial và Phase 1 chưa đóng. CI sẽ theo commit sau khi push branch làm việc; chỉ ghi PASS sau khi có kết quả thật.

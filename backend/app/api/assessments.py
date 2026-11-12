@@ -23,6 +23,9 @@ async def _queue_position_operation(position_id: UUID, user: dict, capability: s
         # Serialize check-and-queue across API requests for the same position.
         if not db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id = :id FOR UPDATE"), {"id": position}).first():
             raise NotFoundError("Position")
+        from app.services.retention import position_has_inflight_purge
+        if position_has_inflight_purge(db, position):
+            raise HTTPException(status_code=409, detail="Vị trí có case xóa đang xử lý hoặc cần phục hồi")
         if not db.execute(text("""SELECT 1 FROM app_private.criteria_versions WHERE position_id = :id AND status = 'APPROVED'
             AND jd_version_id = (SELECT jd_version_id FROM app_private.jd_versions WHERE position_id = :id ORDER BY version_number DESC LIMIT 1) LIMIT 1"""), {"id": position}).first():
             raise CriteriaNotApprovedError()

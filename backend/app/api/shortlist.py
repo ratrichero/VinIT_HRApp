@@ -92,6 +92,10 @@ async def create_shortlist_share(request: CreateShortlistShareRequest, current_u
 
     db = SessionLocal()
     try:
+        from app.services.retention import position_has_inflight_purge
+        db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id=:id FOR UPDATE"), {"id": position_id})
+        if position_has_inflight_purge(db, position_id):
+            raise HTTPException(status_code=409, detail="Vị trí có case xóa đang xử lý hoặc cần phục hồi")
         recipient_ok = db.execute(text("""
             SELECT 1 FROM app_private.position_assignments pa
             JOIN app_private.user_profiles up ON up.user_id = pa.user_id
@@ -264,9 +268,17 @@ async def add_shortlist_feedback(share_id: UUID, request: ShortlistFeedbackReque
         raise HTTPException(status_code=400, detail="Vui lòng nhập phản hồi")
     db = SessionLocal()
     try:
+        from app.services.retention import position_has_inflight_purge
+        share = _get_share(db, str(share_id), current_user["user_id"])
+        position_id = str(share["position_id"])
+        db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id=:id FOR UPDATE"), {"id": position_id})
+        if position_has_inflight_purge(db, position_id):
+            raise HTTPException(status_code=409, detail="Vị trí có case xóa đang xử lý hoặc cần phục hồi")
         share = _get_share(db, str(share_id), current_user["user_id"], lock=True)
         if share["status"] != "ACTIVE":
             raise HTTPException(status_code=400, detail="Shortlist đã bị thu hồi")
+        if not request.application_id and share["share_level_feedback_blocked"]:
+            raise HTTPException(status_code=409, detail="Shortlist đã thay đổi do retention; hãy yêu cầu HR tạo shortlist mới để gửi phản hồi chung")
         if request.application_id and not db.execute(text("""
             SELECT 1 FROM app_private.shortlist_share_items
             WHERE share_id = :share_id AND application_id = :application_id

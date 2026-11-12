@@ -954,5 +954,12 @@
   "Chọn tất cả hồ sơ Shortlist đang hiển thị để chia sẻ": "Select all visible Shortlisted applications to share",
   "Chọn hồ sơ để chia sẻ shortlist": "Select application to share the shortlist",
   "Chỉ chọn được hồ sơ đã Shortlist để chia sẻ cho Hiring Manager": "Only Shortlisted applications can be selected for sharing with the Hiring Manager",
-  "Chuyển hồ sơ sang Shortlist để chọn chia sẻ cho Hiring Manager.": "Move the application to Shortlist to select it for sharing with the Hiring Manager."
+  "Chuyển hồ sơ sang Shortlist để chọn chia sẻ cho Hiring Manager.": "Move the application to Shortlist to select it for sharing with the Hiring Manager.",
+  "Không thể tải cảnh báo trùng": "Could not load duplicate warnings",
+  "Cặp cảnh báo trùng hồ sơ": "Potential duplicate pairs",
+  "Tải cảnh báo trùng": "Load duplicate warnings",
+  "Chỉ xem tín hiệu đã ghi nhận trong vị trí này; tín hiệu có thể cũ và không xác nhận hai hồ sơ là trùng.": "Read-only signals recorded for this position; signals may be stale and do not confirm a duplicate.",
+  "Chưa có cảnh báo trùng.": "No duplicate warnings.",
+  "Độ tin cậy": "Confidence",
+  "Shortlist đã thay đổi do retention; hãy yêu cầu HR tạo shortlist mới để gửi phản hồi chung": "This shortlist changed due to retention; ask HR for a new shortlist to submit general feedback."
 }

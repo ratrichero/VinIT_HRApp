@@ -38,6 +38,13 @@ apiClient.interceptors.response.use(
 
 export default apiClient;
 
+export type DuplicateSignal = {
+  signal_id: string; signal_type: string; confidence: number; detector_version: string | null;
+  review_status: string; created_at: string;
+  application_id_1: string; candidate_name_1: string | null;
+  application_id_2: string; candidate_name_2: string | null;
+};
+
 // API Functions
 export const authApi = {
   login: (email: string, password: string) =>
@@ -64,6 +71,7 @@ export const positionsApi = {
   create: (data: any) => apiClient.post('/positions', data),
   getById: (id: string) => apiClient.get(`/positions/${id}`),
   getWorkspace: (id: string) => apiClient.get(`/positions/${id}/workspace`),
+  getDuplicateSignals: (id: string) => apiClient.get<DuplicateSignal[]>(`/positions/${id}/duplicate-signals`),
   update: (id: string, data: any) => apiClient.patch(`/positions/${id}`, data),
   getJdVersions: (id: string) => apiClient.get(`/positions/${id}/jd-versions`),
   createJdVersion: (id: string, data: { content_text: string; language_code: string; expected_jd_version_id: string }) => apiClient.post(`/positions/${id}/jd-versions`, data),
