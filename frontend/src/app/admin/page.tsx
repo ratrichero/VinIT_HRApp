@@ -6,10 +6,11 @@ import * as React from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Alert, Box, Button, Card, CardContent, Checkbox, Chip, CircularProgress, FormControl, FormControlLabel, Grid,
-  InputLabel, MenuItem, Select, TextField, Typography,
+  InputLabel, MenuItem, Select, Tab, Tabs, TextField, Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { adminApi } from '@/lib/api';
+import { moveRoute } from '@/lib/orderedRoutes';
 
 type WorkerHealth = { pending: number; processing: number; stale_heartbeat: number; long_running: number; failed_24h: number; recoveries_24h: number; oldest_pending_seconds: number };
 type RuntimeConfig = { config_id?: string | null; provider: string; provider_name?: string | null; model_name: string; api_base?: string | null; temperature_default: number; external_api_allowed: boolean; api_key_configured?: boolean; api_key_hint?: string | null; fallbacks?: RuntimeConfig[] };
@@ -24,6 +25,7 @@ const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '').rep
 
 export default function AdminPage() {
   const { t, dateLocale } = useI18n();
+  const [section, setSection] = useState('llm');
   const [config, setConfig] = useState<RuntimeConfig | null>(null);
   const [source, setSource] = useState('environment');
   const [allowed, setAllowed] = useState(false);
@@ -50,11 +52,11 @@ export default function AdminPage() {
   const [bgeRouteIds, setBgeRouteIds] = useState<string[]>([]);
   const [bgeApproved, setBgeApproved] = useState(false);
   const [bgeRuntimeEnabled, setBgeRuntimeEnabled] = useState(false);
-  const [ltrMode, setLtrMode] = useState('OFF');
+  const [bgeConfigured, setBgeConfigured] = useState(false);
   const [ltrVersion, setLtrVersion] = useState('');
   const [ltrSelection, setLtrSelection] = useState<LtrSelection | null>(null);
-  const [ltrManagedHint, setLtrManagedHint] = useState(false);
-  const [ltrDraftId, setLtrDraftId] = useState('');
+  const [ltrEnabled, setLtrEnabled] = useState(false);
+  const [ltrActiveApproved, setLtrActiveApproved] = useState(false);
   const [ltrReason, setLtrReason] = useState('');
   const [ltrShadowApproved, setLtrShadowApproved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -70,7 +72,7 @@ export default function AdminPage() {
     && Boolean(config.api_key_configured) && normalizeBaseUrl(customBaseUrl) !== ''
     && normalizeBaseUrl(customBaseUrl) === normalizeBaseUrl(config.api_base || '');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (sync: { llm?: boolean; bge?: boolean } = { llm: true, bge: true }) => {
     try {
       setLoading(true); setError(null);
       const [active, worker, permitted, history, auxiliary, models, bgeSet, ltrSelected] = await Promise.all([
@@ -79,23 +81,27 @@ export default function AdminPage() {
       ]);
       setAuxDrafts(auxiliary.data); setLtrModels(models.data);
       setLtrSelection(ltrSelected.data.selection);
-      setLtrManagedHint(Boolean(ltrSelected.data.managed_allowed && ltrSelected.data.worker_mode_hint === 'SHADOW'));
+      setLtrEnabled(Boolean(ltrSelected.data.enabled));
+      setLtrActiveApproved(false);
       setLtrShadowApproved(false);
-      setBgeRouteIds((bgeSet.data.route_set?.routes || []).map((route: { config_id: string }) => route.config_id));
-      setBgeRuntimeEnabled(Boolean(bgeSet.data.semantic_enabled && bgeSet.data.managed_routing_allowed));
+      if (sync.bge) setBgeRouteIds((bgeSet.data.route_set?.routes || []).map((route: { config_id: string }) => route.config_id));
+      setBgeRuntimeEnabled(Boolean(bgeSet.data.enabled));
+      setBgeConfigured(Boolean(bgeSet.data.route_set?.routes?.length));
       setBgeApproved(false);
       const current: RuntimeConfig = active.data.config;
       setConfig(current); setSource(active.data.source); setAllowed(active.data.allowed_by_this_process);
       setHealth(worker.data); setOptions(permitted.data); setVersions(history.data);
-      setProvider(current.provider); setProviderName(current.provider_name || '');
-      setModel(current.model_name); setEndpoint(current.api_base || '');
-      setCustomModel(current.provider === 'compatible' ? current.model_name : '');
-      setCustomBaseUrl(current.provider === 'compatible' ? (current.api_base || '') : '');
-      setApiKey('');
-      setTestResult(null);
-      setTemperature(String(current.temperature_default));
-      setFallbackIds((current.fallbacks || []).map(item => item.config_id).filter((id): id is string => Boolean(id)));
-      setFallbackApproved(false);
+      if (sync.llm) {
+        setProvider(current.provider); setProviderName(current.provider_name || '');
+        setModel(current.model_name); setEndpoint(current.api_base || '');
+        setCustomModel(current.provider === 'compatible' ? current.model_name : '');
+        setCustomBaseUrl(current.provider === 'compatible' ? (current.api_base || '') : '');
+        setApiKey('');
+        setTestResult(null);
+        setTemperature(String(current.temperature_default));
+        setFallbackIds((current.fallbacks || []).map(item => item.config_id).filter((id): id is string => Boolean(id)));
+        setFallbackApproved(false);
+      }
     } catch (err: any) {
       setError(err.response?.data?.detail || t("Không thể tải cấu hình AI và trạng thái hàng đợi."));
     } finally { setLoading(false); }
@@ -123,6 +129,7 @@ export default function AdminPage() {
     if (isCompatible && apiKey && !apiKeyEncryptionReady) {
       setError(t("Server chưa cấu hình khóa mã hóa để lưu API Key. Quản trị viên hệ thống cần đặt AI_CONFIG_ENCRYPTION_KEY trong môi trường backend rồi khởi động lại.")); return;
     }
+    if (activateNow && !window.confirm(t("Kích hoạt cấu hình LLM mới cho các tác vụ tiếp theo?"))) return;
     try {
       setSaving(true); setError(null); setSuccess(null);
       const payload = isCompatible
@@ -132,7 +139,7 @@ export default function AdminPage() {
       const created = await adminApi.createAiConfig(payload);
       setApiKey('');
       if (activateNow) await adminApi.enableAiConfig(created.data.config_id);
-      await load();
+      await load({ llm: true });
       setSuccess(t(activateNow ? "Đã kích hoạt phiên bản cấu hình. Tác vụ đang chạy tiếp tục dùng cấu hình đã ghim." : "Đã lưu cấu hình LLM bản nháp."));
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể kích hoạt cấu hình AI.")); }
     finally { setSaving(false); }
@@ -166,48 +173,55 @@ export default function AdminPage() {
       await adminApi.createBgeDraft({ provider_name: bgeProvider.trim(), model_name: bgeModel.trim(),
         api_base: bgeBase.trim(), ...(bgeKey ? { api_key: bgeKey } : {}), dimension: 1024,
         index_version: bgeIndex.trim(), top_k: 5, min_similarity: 0.35 });
-      setBgeKey(''); await load(); setSuccess(t("Đã lưu bản nháp BGE; runtime chưa thay đổi."));
+      setBgeKey(''); await load({}); setSuccess(t("Đã lưu bản nháp BGE; runtime chưa thay đổi."));
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể lưu bản nháp BGE.")); }
     finally { setSaving(false); }
   };
   const saveBgeRouteSet = async () => {
     if (!bgeApproved) { setError(t("Cần xác nhận từng endpoint BGE đã được phê duyệt xử lý dữ liệu")); return; }
+    if (!window.confirm(t("Bật BGE có thể gửi dữ liệu ứng viên tới endpoint đã chọn. Tiếp tục?"))) return;
     try {
       setSaving(true); setError(null); setSuccess(null);
-      const result = await adminApi.selectBgeRouteSet({ route_config_ids: bgeRouteIds, destinations_approved: bgeApproved });
-      await load();
-      setSuccess(t(result.data.runtime_enabled ? "Đã chọn chuỗi BGE; kiểm tra cấu hình từng worker trước khi sử dụng." : "Đã chọn chuỗi BGE; tiến trình API báo runtime đang bị khóa bởi cấu hình môi trường."));
+      await adminApi.selectBgeRouteSet({ route_config_ids: bgeRouteIds, destinations_approved: bgeApproved });
+      await load({ bge: true });
+      setSuccess(t("Đã bật BGE trong database; trạng thái thực tế của worker chưa được xác minh."));
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể chọn chuỗi BGE.")); }
     finally { setSaving(false); }
   };
-  const saveLtrDraft = async () => {
+  const disableBge = async () => {
+    if (!window.confirm(t("Tắt BGE? Các yêu cầu đang thực hiện có thể vẫn hoàn tất."))) return;
     try {
       setSaving(true); setError(null); setSuccess(null);
-      await adminApi.createLtrDraft({ mode: ltrMode, model_version: ltrVersion || null });
-      await load(); setSuccess(t("Đã lưu bản nháp LTR; runtime chưa thay đổi."));
-    } catch (err: any) { setError(err.response?.data?.detail || t("Không thể lưu bản nháp LTR.")); }
+      await adminApi.disableBge(); await load({});
+      setSuccess(t("Đã tắt BGE trong database; yêu cầu đang chạy có thể vẫn hoàn tất."));
+    } catch (err: any) { setError(err.response?.data?.detail || t("Không thể tắt BGE.")); }
     finally { setSaving(false); }
   };
   const reviewLtr = async (version: string, action: 'approve' | 'reject') => {
     try {
       setSaving(true); setError(null); setSuccess(null);
       await adminApi.reviewLtrModel(version, action, ltrReason.trim());
-      setLtrReason(''); await load(); setSuccess(t("Đã ghi nhận đánh giá model LTR."));
+      setLtrReason(''); await load({}); setSuccess(t("Đã ghi nhận đánh giá model LTR."));
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể đánh giá model LTR.")); }
     finally { setSaving(false); }
   };
-  const selectLtr = async (mode: 'OFF' | 'SHADOW') => {
+  const selectLtr = async (mode: 'OFF' | 'SHADOW' | 'ACTIVE') => {
+    const prompt = mode === 'ACTIVE'
+      ? t("Bật LTR ACTIVE có thể thay đổi thứ tự ứng viên. Xác nhận triển khai?")
+      : mode === 'SHADOW' ? t("Bật LTR SHADOW cho model đã chọn?") : t("Tắt LTR và dùng xếp hạng mặc định?");
+    if (!window.confirm(prompt)) return;
     try {
       setSaving(true); setError(null); setSuccess(null);
-      await adminApi.selectLtr({ mode, reason: ltrReason.trim(), ...(mode === 'SHADOW' ? { draft_config_id: ltrDraftId, shadow_approved: ltrShadowApproved } : {}) });
-      setLtrReason(''); await load(); setSuccess(t("Đã ghi lựa chọn LTR; kiểm tra cấu hình từng worker."));
+      await adminApi.selectLtr({ mode, reason: ltrReason.trim(), ...(mode !== 'OFF' ? { model_version: ltrVersion, shadow_approved: ltrShadowApproved, active_approved: ltrActiveApproved } : {}) });
+      setLtrReason(''); await load({}); setSuccess(t("Đã ghi lựa chọn LTR trong database; trạng thái worker chưa được xác minh."));
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể chọn cấu hình LTR.")); }
     finally { setSaving(false); }
   };
   const activate = async (id: string) => {
+    if (!window.confirm(t("Kích hoạt cấu hình LLM mới cho các tác vụ tiếp theo?"))) return;
     try {
       setSaving(true); setError(null); setSuccess(null);
-      await adminApi.enableAiConfig(id); await load(); setSuccess(t("Đã kích hoạt phiên bản cấu hình."));
+      await adminApi.enableAiConfig(id); await load({ llm: true }); setSuccess(t("Đã kích hoạt phiên bản cấu hình."));
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể kích hoạt cấu hình AI.")); }
     finally { setSaving(false); }
   };
@@ -217,12 +231,16 @@ export default function AdminPage() {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2, mb: 3 }}>
         <Box><Typography variant="h1" sx={{ fontSize: 26, color: '#0A2B57' }}>{t("Quản trị AI")}</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{t("Cấu hình và giám sát dịch vụ xử lý")}</Typography></Box>
-        <Button startIcon={<RefreshIcon />} variant="outlined" onClick={load} disabled={loading || saving}>{t("Làm mới")}</Button>
+        <Button startIcon={<RefreshIcon />} variant="outlined" onClick={() => load()} disabled={loading || saving}>{t("Làm mới")}</Button>
       </Box>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>{t(error)}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess(null)}>{t(success)}</Alert>}
       {loading ? <Box sx={{ textAlign: 'center', py: 8 }}><CircularProgress color="secondary" /></Box> : config && options && (
         <>
+          <Tabs value={section} onChange={(_, value: string) => setSection(value)} variant="scrollable" scrollButtons="auto" aria-label={t("Nhóm cấu hình AI")} sx={{ mb: 3 }}>
+            <Tab id="tab-llm" aria-controls="panel-llm" value="llm" label="LLM" /><Tab id="tab-bge" aria-controls="panel-bge" value="bge" label="BGE" /><Tab id="tab-ltr" aria-controls="panel-ltr" value="ltr" label="LTR" /><Tab id="tab-queue" aria-controls="panel-queue" value="queue" label={t("Hàng đợi")} />
+          </Tabs>
+          <Box role="tabpanel" id="panel-llm" aria-labelledby="tab-llm" hidden={section !== 'llm'}>
           <Alert severity="info" sx={{ mb: 3 }}>{isCompatible
             ? t("Với OpenAI Compatible, Admin nhập tên nhà cung cấp, Base URL, API Key và Model. API Key được mã hóa phía server, không hiển thị lại và không ghi vào snapshot tác vụ.")
             : t("Với Local/OpenAI/Azure gateway, chỉ chọn được model và endpoint do người vận hành cho phép; API key dùng từ môi trường/secret manager. Chọn OpenAI Compatible nếu cần nhập tên nhà cung cấp, Base URL, API Key và Model. Chính sách mạng và ALLOW_EXTERNAL_API không thể thay đổi tại đây.")}</Alert>
@@ -243,6 +261,8 @@ export default function AdminPage() {
                 <Typography variant="body1" sx={{ mt: 0.5, wordBreak: 'break-word', fontWeight: 600 }}>{value}</Typography>
               </Grid>)}
             </Grid>
+            <Typography variant="subtitle2" sx={{ mt: 2 }}>{t("Chuỗi LLM dự phòng đang lưu")}</Typography>
+            {(config.fallbacks || []).length ? config.fallbacks?.map((item, index) => <Typography key={item.config_id || index} variant="body2">{index + 1}. {item.provider_name || item.provider} · {item.model_name} · {item.api_base || '—'}</Typography>) : <Typography variant="body2" color="text.secondary">{t("Không có LLM dự phòng")}</Typography>}
           </CardContent></Card>
           <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
             <Typography variant="h4" sx={{ mb: 2 }}>{t("Tạo và kích hoạt phiên bản mới")}</Typography>
@@ -277,24 +297,26 @@ export default function AdminPage() {
                 <Grid item xs={12} sm={4}><TextField fullWidth size="small" type="number" label="Temperature" value={temperature} onChange={e => setTemperature(e.target.value)} inputProps={{ min: 0, max: 1, step: 0.05 }} /></Grid>
               </>}
             </Grid>
-            <FormControl fullWidth size="small" sx={{ mt: 2 }}>
-              <InputLabel id="llm-fallback-label">{t("LLM dự phòng theo thứ tự")}</InputLabel>
-              <Select labelId="llm-fallback-label" multiple label={t("LLM dự phòng theo thứ tự")}
-                value={fallbackIds} onChange={event => {
-                  const value = event.target.value;
-                  const next = typeof value === 'string' ? value.split(',') : value;
-                  if (next.length <= 3) { setFallbackIds(next); setFallbackApproved(false); }
-                }}
-                renderValue={selected => selected.map((id, index) => {
-                  const route = versions.find(item => item.config_id === id);
-                  return `${index + 1}. ${route?.provider_name || route?.provider || id} / ${route?.model_name || ''}`;
-                }).join(' → ')}>
-                {versions.map(version => <MenuItem key={version.config_id} value={version.config_id}>
-                  {version.provider_name || version.provider} · {version.model_name} · {version.status}
-                </MenuItem>)}
-              </Select>
-            </FormControl>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>{t("Chọn tối đa 3 cấu hình LLM đã lưu theo thứ tự. Lưu bản nháp trước để thêm nhà cung cấp mới. Mỗi fallback chỉ dùng cấu hình được chọn, không dùng chuỗi lồng của nó. Chỉ cấu hình các nhà cung cấp đã được phê duyệt xử lý dữ liệu.")}</Typography>
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle1">{t("LLM dự phòng theo thứ tự")}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">{t("Thêm tối đa 3 phiên bản đã lưu. Dùng nút lên/xuống để đổi thứ tự ưu tiên; chỉ chọn nhà cung cấp được phê duyệt xử lý dữ liệu.")}</Typography>
+              {fallbackIds.map((id, index) => {
+                const route = versions.find(item => item.config_id === id);
+                return <Box key={id} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 1 }}>
+                  <Typography sx={{ flex: 1, minWidth: 180 }}>{index + 1}. {route ? `${route.provider_name || route.provider} · ${route.model_name}` : id}</Typography>
+                  <Button size="small" disabled={saving || index === 0} onClick={() => { setFallbackIds(moveRoute(fallbackIds, index, -1)); setFallbackApproved(false); }} aria-label={`${t("Đưa lên")} ${index + 1}`}>{t("Lên")}</Button>
+                  <Button size="small" disabled={saving || index === fallbackIds.length - 1} onClick={() => { setFallbackIds(moveRoute(fallbackIds, index, 1)); setFallbackApproved(false); }} aria-label={`${t("Đưa xuống")} ${index + 1}`}>{t("Xuống")}</Button>
+                  <Button size="small" disabled={saving} onClick={() => { setFallbackIds(fallbackIds.filter(item => item !== id)); setFallbackApproved(false); }}>{t("Xóa")}</Button>
+                </Box>;
+              })}
+              <FormControl fullWidth size="small" sx={{ mt: 2 }} disabled={saving || fallbackIds.length >= 3}>
+                <InputLabel id="llm-fallback-add-label">{t("Thêm LLM dự phòng")}</InputLabel>
+                <Select labelId="llm-fallback-add-label" label={t("Thêm LLM dự phòng")} value="" onChange={event => { if (event.target.value) { setFallbackIds([...fallbackIds, event.target.value]); setFallbackApproved(false); } }}>
+                  {versions.filter(item => !fallbackIds.includes(item.config_id)).map(version => <MenuItem key={version.config_id} value={version.config_id}>{version.provider_name || version.provider} · {version.model_name} · {version.api_base || '—'} · {new Date(version.created_at).toLocaleString(dateLocale)} · {version.status}</MenuItem>)}
+                </Select>
+              </FormControl>
+            </Box>
+            <Typography variant="caption" color="text.secondary" display="block">{t("Lưu nhà cung cấp mới thành bản nháp trước khi thêm. Chuỗi lồng của các phiên bản dự phòng không được sử dụng.")}</Typography>
             {fallbackIds.length > 0 && <FormControlLabel control={<Checkbox checked={fallbackApproved} onChange={event => setFallbackApproved(event.target.checked)} />} label={t("Tôi xác nhận từng nhà cung cấp dự phòng đã được phê duyệt xử lý dữ liệu trong phạm vi sử dụng.")} />}
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>{t("Temperature áp dụng khi tạo tiêu chí; trích xuất và đối chiếu CV luôn dùng 0. Các tác vụ đã bắt đầu giữ cấu hình của lần chạy đầu tiên, kể cả khi phục hồi.")}</Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>{t("Kết quả đã có không tự đánh giá lại khi đổi cấu hình; pipeline chỉ đánh giá profile và tiêu chí chưa có kết quả hiện hành.")}</Typography>
@@ -308,10 +330,20 @@ export default function AdminPage() {
               {t(testResult.message)}{testResult.status_code ? ` · HTTP ${testResult.status_code}` : ''}{testResult.latency_ms != null ? ` · ${testResult.latency_ms} ms` : ''}{testResult.provider_returned_model ? ` · ${testResult.provider_returned_model}` : ''}
             </Alert>}
           </CardContent></Card>
+          {versions.length > 0 && <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
+            <Typography variant="h4" sx={{ mb: 2 }}>{t("Lịch sử phiên bản")}</Typography>
+            {versions.map(version => <Box key={version.config_id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', py: 1 }}>
+              <Box><Typography variant="body2" fontWeight={600}>{version.provider_name ? `${version.provider_name} · ` : ''}{version.model_name} · {t(version.status === "ACTIVE" ? "Đang hoạt động cấu hình" : version.status === "DRAFT" ? "Bản nháp cấu hình" : "Đã tắt cấu hình")}</Typography><Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>{version.api_base || t("Không có endpoint")} · {new Date(version.created_at).toLocaleString(dateLocale)} · {version.api_key_configured ? `${t("Đã lưu API key")} ${version.api_key_hint || ''}`.trim() : t("Chưa lưu API key")}</Typography></Box>
+              {version.status !== 'ACTIVE' && <Button size="small" disabled={saving} onClick={() => activate(version.config_id)}>{t("Kích hoạt")}</Button>}
+            </Box>)}
+          </CardContent></Card>}
+          </Box>
+          <Box role="tabpanel" id="panel-bge" aria-labelledby="tab-bge" hidden={section !== 'bge'}>
           <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
-            <Typography variant="h4" sx={{ mb: 2 }}>{t("Cấu hình BGE và LTR — bản nháp")}</Typography>
-            <Alert severity="warning" sx={{ mb: 2 }}>{t("Bản nháp chỉ lưu thông tin và không tự bật BGE/LTR. Chọn chuỗi BGE riêng; worker còn chịu các khóa môi trường. Không thay thế phê duyệt privacy, chất lượng và triển khai. BGE không phải LLM chat; LTR dùng model registry.")}</Alert>
-            <Typography variant="h6" sx={{ mb: 1 }}>{t("BGE embedding")}</Typography>
+            <Typography variant="h4" sx={{ mb: 2 }}>{t("BGE embedding")}</Typography>
+            <Alert severity="warning" sx={{ mb: 2 }}>{t("Bản nháp không bật BGE. Bật chuỗi sau khi phê duyệt dữ liệu và endpoint; chính sách mạng vẫn được áp dụng. Yêu cầu đang chạy có thể tiếp tục sau khi tắt.")}</Alert>
+            <Typography variant="body2" sx={{ mb: 1 }}>{t("Trạng thái trong database")}: <strong>{bgeRuntimeEnabled ? "ON" : "OFF"}</strong> · {t("Chưa xác minh trạng thái từng worker.")}</Typography>
+            {bgeRuntimeEnabled && !bgeConfigured && <Alert severity="error" sx={{ mb: 2 }}>{t("BGE đang bật trong database nhưng chuỗi không khả dụng; worker mới sẽ dùng lexical.")}</Alert>}
             <Grid container spacing={2}>
               <Grid item xs={12} sm={6}><TextField fullWidth size="small" label={t("Nhà cung cấp")} value={bgeProvider} onChange={e => setBgeProvider(e.target.value)} /></Grid>
               <Grid item xs={12} sm={6}><TextField fullWidth size="small" label="Model" value={bgeModel} onChange={e => setBgeModel(e.target.value)} /></Grid>
@@ -321,44 +353,50 @@ export default function AdminPage() {
             </Grid>
             <Typography variant="caption" color="text.secondary">{t("Mặc định: 1024 chiều, top-k 5, ngưỡng 0.35. API key được mã hóa phía server; không hiển thị lại.")}</Typography>
             <Box sx={{ mt: 1 }}><Button variant="outlined" onClick={saveBgeDraft} disabled={saving || !bgeProvider.trim() || !bgeBase.trim() || !bgeModel.trim() || !bgeIndex.trim()}>{t("Lưu bản nháp BGE")}</Button></Box>
-            <FormControl fullWidth size="small" sx={{ mt: 2 }}>
-              <InputLabel id="bge-routes-label">{t("BGE chính và dự phòng theo thứ tự")}</InputLabel>
-              <Select labelId="bge-routes-label" multiple label={t("BGE chính và dự phòng theo thứ tự")} value={bgeRouteIds}
-                onChange={event => { const value = event.target.value; const next = typeof value === 'string' ? value.split(',') : value; if (next.length <= 4) { setBgeRouteIds(next); setBgeApproved(false); } }}
-                renderValue={selected => selected.map((id, index) => { const item = auxDrafts.find(d => d.config_id === id); return `${index + 1}. ${item?.config.provider_name || id} / ${item?.config.model_name || ''}`; }).join(' → ')}>
-                {auxDrafts.filter(draft => draft.service_type === 'BGE').map(draft => <MenuItem key={draft.config_id} value={draft.config_id}>{String(draft.config.provider_name)} · {String(draft.config.model_name)} · {new Date(draft.created_at).toLocaleString(dateLocale)}</MenuItem>)}
-              </Select>
-            </FormControl>
-            <Typography variant="caption" color="text.secondary" display="block">{t("Chọn tối đa 4 route: route đầu là chính; các route sau là dự phòng. Mỗi provider dùng vùng cache vector riêng.")}</Typography>
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle1">{t("BGE chính và dự phòng theo thứ tự")}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">{t("Danh sách đang chỉnh sửa chỉ áp dụng khi bấm Bật / cập nhật BGE.")}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">{t("Chọn tối đa 4 route: route đầu là chính; các route sau là dự phòng. Mỗi provider dùng vùng cache vector riêng.")}</Typography>
+              {bgeRouteIds.map((id, index) => {
+                const route = auxDrafts.find(item => item.config_id === id);
+                return <Box key={id} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mt: 1 }}>
+                  <Typography sx={{ flex: 1, minWidth: 180 }}>{index + 1}. {route ? `${route.config.provider_name} · ${route.config.model_name}` : id}</Typography>
+                  <Button size="small" disabled={saving || index === 0} onClick={() => { setBgeRouteIds(moveRoute(bgeRouteIds, index, -1)); setBgeApproved(false); }} aria-label={`${t("Đưa lên")} ${index + 1}`}>{t("Lên")}</Button>
+                  <Button size="small" disabled={saving || index === bgeRouteIds.length - 1} onClick={() => { setBgeRouteIds(moveRoute(bgeRouteIds, index, 1)); setBgeApproved(false); }} aria-label={`${t("Đưa xuống")} ${index + 1}`}>{t("Xuống")}</Button>
+                  <Button size="small" disabled={saving} onClick={() => { setBgeRouteIds(bgeRouteIds.filter(item => item !== id)); setBgeApproved(false); }}>{t("Xóa")}</Button>
+                </Box>;
+              })}
+              <FormControl fullWidth size="small" sx={{ mt: 2 }} disabled={saving || bgeRouteIds.length >= 4}>
+                <InputLabel id="bge-route-add-label">{t("Thêm route BGE")}</InputLabel>
+                <Select labelId="bge-route-add-label" label={t("Thêm route BGE")} value="" onChange={event => { if (event.target.value) { setBgeRouteIds([...bgeRouteIds, event.target.value]); setBgeApproved(false); } }}>
+                  {auxDrafts.filter(item => item.service_type === 'BGE' && !bgeRouteIds.includes(item.config_id)).map(item => <MenuItem key={item.config_id} value={item.config_id}>{String(item.config.provider_name)} · {String(item.config.model_name)} · {new Date(item.created_at).toLocaleString(dateLocale)}</MenuItem>)}
+                </Select>
+              </FormControl>
+            </Box>
             <FormControlLabel control={<Checkbox checked={bgeApproved} onChange={event => setBgeApproved(event.target.checked)} />} label={t("Tôi xác nhận từng endpoint BGE đã được phê duyệt xử lý dữ liệu trong phạm vi sử dụng.")} />
-            <Box><Button variant="outlined" onClick={saveBgeRouteSet} disabled={saving || !bgeRouteIds.length || !bgeApproved}>{t("Chọn chuỗi BGE")}</Button></Box>
-            <Typography variant="caption" color="text.secondary">{t(bgeRuntimeEnabled ? "Tiến trình API cho phép BGE quản trị; cần kiểm tra từng worker." : "Tiến trình API báo BGE quản trị đang bị khóa bởi cấu hình môi trường.")}</Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}><Button variant="contained" onClick={saveBgeRouteSet} disabled={saving || !bgeRouteIds.length || !bgeApproved}>{t("Bật / cập nhật BGE")}</Button><Button variant="outlined" onClick={disableBge} disabled={saving || !bgeRuntimeEnabled}>{t("Tắt BGE")}</Button></Box>
+          </CardContent></Card>
+          </Box>
+          <Box role="tabpanel" id="panel-ltr" aria-labelledby="tab-ltr" hidden={section !== 'ltr'}>
+          <Card variant="outlined"><CardContent sx={{ p: 3 }}>
             <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>{t("LTR ranking")}</Typography>
-            <Grid container spacing={2}>
-              <Grid item xs={12} sm={4}><FormControl fullWidth size="small"><InputLabel id="ltr-mode-label">{t("Chế độ dự kiến")}</InputLabel><Select labelId="ltr-mode-label" label={t("Chế độ dự kiến")} value={ltrMode} onChange={e => setLtrMode(e.target.value)}><MenuItem value="OFF">OFF</MenuItem><MenuItem value="SHADOW">SHADOW</MenuItem><MenuItem value="ACTIVE">ACTIVE</MenuItem></Select></FormControl></Grid>
-              <Grid item xs={12} sm={8}><FormControl fullWidth size="small"><InputLabel id="ltr-model-label">{t("Model trong registry")}</InputLabel><Select labelId="ltr-model-label" label={t("Model trong registry")} value={ltrVersion} onChange={e => setLtrVersion(e.target.value)}><MenuItem value="">{t("Không chọn")}</MenuItem>{ltrModels.map(item => <MenuItem key={item.model_version} value={item.model_version}>{item.model_version} · {item.status}</MenuItem>)}</Select></FormControl></Grid>
-            </Grid>
-            <Box sx={{ mt: 1 }}><Button variant="outlined" onClick={saveLtrDraft} disabled={saving || (ltrMode !== 'OFF' && !ltrVersion)}>{t("Lưu bản nháp LTR")}</Button></Box>
-            <Alert severity="info" sx={{ mt: 2 }}>{t("Model phải được review và đạt gate trước khi chọn SHADOW. Chưa hỗ trợ chọn ACTIVE từ đây; các khóa môi trường của từng worker vẫn quyết định runtime. OFF này không tắt cấu hình LTR legacy. Metrics tự khai không thay thế HR gold hoặc phê duyệt pilot.")}</Alert>
+            <Typography variant="body2">{t("Trạng thái trong database")}: <strong>{ltrEnabled ? (ltrSelection?.mode || t("Không hợp lệ")) : 'OFF'}</strong> · {ltrEnabled ? ltrSelection?.model_version || '—' : '—'} · {t("Chưa xác minh trạng thái từng worker.")}</Typography>
+            {ltrEnabled && (!ltrSelection || ltrSelection.mode === 'OFF') && <Alert severity="error" sx={{ mt: 2 }}>{t("LTR đang bật trong database nhưng selection không hợp lệ; worker mới sẽ dùng OFF.")}</Alert>}
+            <Alert severity="warning" sx={{ mt: 2 }}>{t("SHADOW không đổi thứ tự. ACTIVE có thể đổi thứ tự trong cùng nhóm điều kiện bắt buộc; cần model đã duyệt, có ranking SHADOW và phê duyệt chất lượng thực tế. Một ranking SHADOW không chứng minh chất lượng HR gold.")}</Alert>
             <TextField fullWidth size="small" sx={{ mt: 2 }} label={t("Lý do review hoặc lựa chọn LTR")} value={ltrReason} onChange={e => setLtrReason(e.target.value)} inputProps={{ maxLength: 1000 }} />
             {ltrModels.map(item => <Box key={item.model_version} sx={{ mt: 1, wordBreak: 'break-word' }}>
               <Typography variant="body2">{item.model_version} · {item.status} · SHA-256: {item.artifact_sha256 || '—'}</Typography>
               <Typography variant="caption" display="block">{t("Metrics và hash dữ liệu")}: {JSON.stringify(item.metrics || {})} · {item.data_sha256 || '—'}</Typography>
               {item.status === 'DRAFT' && <Box><Button size="small" disabled={saving || !ltrReason.trim()} onClick={() => reviewLtr(item.model_version, 'approve')}>{t("Phê duyệt model")}</Button><Button size="small" disabled={saving || !ltrReason.trim()} onClick={() => reviewLtr(item.model_version, 'reject')}>{t("Từ chối model")}</Button></Box>}
             </Box>)}
-            <FormControl fullWidth size="small" sx={{ mt: 2 }}><InputLabel id="ltr-draft-selection">{t("Draft LTR SHADOW")}</InputLabel><Select labelId="ltr-draft-selection" label={t("Draft LTR SHADOW")} value={ltrDraftId} onChange={e => { setLtrDraftId(e.target.value); setLtrShadowApproved(false); }}><MenuItem value="">{t("Không chọn")}</MenuItem>{auxDrafts.filter(d => d.service_type === 'LTR' && d.config.mode === 'SHADOW').map(d => <MenuItem key={d.config_id} value={d.config_id}>{String(d.config.model_version)} · {new Date(d.created_at).toLocaleString(dateLocale)}</MenuItem>)}</Select></FormControl>
+            <FormControl fullWidth size="small" sx={{ mt: 2 }}><InputLabel id="ltr-model-label">{t("Model trong registry")}</InputLabel><Select labelId="ltr-model-label" label={t("Model trong registry")} value={ltrVersion} onChange={e => { setLtrVersion(e.target.value); setLtrShadowApproved(false); setLtrActiveApproved(false); }}><MenuItem value="">{t("Không chọn")}</MenuItem>{ltrModels.filter(item => item.status === 'APPROVED').map(item => <MenuItem key={item.model_version} value={item.model_version}>{item.model_version} · {item.status}</MenuItem>)}</Select></FormControl>
             <FormControlLabel control={<Checkbox checked={ltrShadowApproved} onChange={e => setLtrShadowApproved(e.target.checked)} />} label={t("Tôi xác nhận phạm vi SHADOW đã được phê duyệt.")} />
-            <Box><Button variant="outlined" onClick={() => selectLtr('SHADOW')} disabled={saving || !ltrDraftId || !ltrReason.trim() || !ltrShadowApproved}>{t("Chọn LTR SHADOW")}</Button> <Button variant="outlined" onClick={() => selectLtr('OFF')} disabled={saving || !ltrReason.trim()}>{t("Chọn managed LTR OFF")}</Button></Box>
-            <Typography variant="caption" display="block">{t("Lựa chọn hiện tại")}: {ltrSelection?.mode || 'OFF'} · {ltrSelection?.model_version || '—'} · {t(ltrManagedHint ? "Tiến trình API cho phép managed SHADOW; cần kiểm tra từng worker." : "Tiến trình API báo managed SHADOW đang bị khóa; cần kiểm tra từng worker.")}</Typography>
+            <FormControlLabel control={<Checkbox checked={ltrActiveApproved} onChange={e => setLtrActiveApproved(e.target.checked)} />} label={t("Tôi xác nhận chất lượng thực tế, phạm vi ACTIVE và kế hoạch rollback đã được phê duyệt.")} />
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}><Button variant="outlined" onClick={() => selectLtr('SHADOW')} disabled={saving || !ltrVersion || !ltrReason.trim() || !ltrShadowApproved}>{t("Bật LTR SHADOW")}</Button><Button variant="contained" color="warning" onClick={() => selectLtr('ACTIVE')} disabled={saving || !ltrVersion || !ltrReason.trim() || !ltrActiveApproved}>{t("Bật LTR ACTIVE")}</Button><Button variant="outlined" onClick={() => selectLtr('OFF')} disabled={saving || !ltrReason.trim()}>{t("Tắt LTR")}</Button></Box>
             {auxDrafts.length > 0 && <Box sx={{ mt: 2 }}><Typography variant="subtitle2">{t("Bản nháp gần đây")}</Typography>{auxDrafts.slice(0, 6).map(draft => <Typography key={draft.config_id} variant="caption" display="block">{draft.service_type} · {String(draft.config.model_name || draft.config.model_version || draft.config.mode || '')} · {new Date(draft.created_at).toLocaleString(dateLocale)} {draft.api_key_configured ? `· ${t("Đã lưu API key")} ${draft.api_key_hint || ''}` : ''}</Typography>)}</Box>}
           </CardContent></Card>
-          {versions.length > 0 && <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
-            <Typography variant="h4" sx={{ mb: 2 }}>{t("Lịch sử phiên bản")}</Typography>
-            {versions.map(version => <Box key={version.config_id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', py: 1 }}>
-              <Box><Typography variant="body2" fontWeight={600}>{version.provider_name ? `${version.provider_name} · ` : ''}{version.model_name} · {t(version.status === "ACTIVE" ? "Đang hoạt động cấu hình" : version.status === "DRAFT" ? "Bản nháp cấu hình" : "Đã tắt cấu hình")}</Typography><Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>{version.api_base || t("Không có endpoint")} · {new Date(version.created_at).toLocaleString(dateLocale)} · {version.api_key_configured ? `${t("Đã lưu API key")} ${version.api_key_hint || ''}`.trim() : t("Chưa lưu API key")}</Typography></Box>
-              {version.status !== 'ACTIVE' && <Button size="small" disabled={saving} onClick={() => activate(version.config_id)}>{t("Kích hoạt")}</Button>}
-            </Box>)}
-          </CardContent></Card>}
+          </Box>
+          <Box role="tabpanel" id="panel-queue" aria-labelledby="tab-queue" hidden={section !== 'queue'}>
           {health && <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
             <Typography variant="h4" sx={{ mb: 2 }}>{t("Giám sát hàng đợi xử lý")}</Typography>
             <Grid container spacing={2}>
@@ -374,6 +412,7 @@ export default function AdminPage() {
             </Grid>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>{t("Đây là chỉ số hàng đợi, không chứng minh worker còn sống. Không tự đặt lại tác vụ chỉ vì heartbeat cũ; xem runbook vận hành.")}</Typography>
           </CardContent></Card>}
+          </Box>
           <Alert severity="warning" sx={{ mt: 3 }}>{t("Chỉ sử dụng dịch vụ AI đã được phê duyệt để xử lý dữ liệu ứng viên. Che dữ liệu nhạy cảm chỉ là biện pháp giảm thiểu, không bảo đảm ẩn danh hoàn toàn.")}</Alert>
         </>
       )}

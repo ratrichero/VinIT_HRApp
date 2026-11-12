@@ -1,4 +1,4 @@
-"""Managed LTR shadow intent: registry approval, hash, worker gates and rollback."""
+"""Managed LTR: approved artifacts, pinned selections and fail-closed rollback."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.services.ltr import LTRError, LTRModel, artifact_sha256
+from app.services.ai_runtime_controls import service_enabled
 
 
 def current_selection(db, *, lock: bool = False) -> dict[str, Any] | None:
@@ -45,16 +46,24 @@ def approved_model(db, version: str, *, expected_hash: str | None = None, lock: 
     return model
 
 
-def resolve_shadow(db, pinned: dict[str, Any] | None) -> LTRModel | None:
-    """No selection, stale snapshot, gate change or invalid model means OFF.
+def resolve_managed(db, pinned: dict[str, Any] | None) -> LTRModel | None:
+    """Hold the control and selected model locks through ranking publication.
 
-    Row locks hold through publication, so an OFF selection waits for any
-    ranking already being published; it governs later transactions.
+    OFF or a changed pin fails closed. An admin change waits for any ongoing
+    publication; no completed OFF can be followed by the old publication.
     """
-    if (not settings.ALLOW_MANAGED_LTR_ROUTING or (settings.LTR_MODE or '').upper() != 'SHADOW'
-            or not isinstance(pinned, dict) or pinned.get('mode') != 'SHADOW'):
+    if not isinstance(pinned, dict) or pinned.get('mode') not in ('SHADOW', 'ACTIVE'):
+        return None
+    if not service_enabled(db, "LTR", lock=True):
         return None
     current = current_selection(db, lock=True)
     if not current or current != pinned:
         return None
     return approved_model(db, current['model_version'], expected_hash=current['artifact_sha256'], lock=True)
+
+
+def resolve_shadow(db, pinned: dict[str, Any] | None) -> LTRModel | None:
+    """Compatibility helper for callers specifically requiring SHADOW."""
+    if not isinstance(pinned, dict) or pinned.get('mode') != 'SHADOW':
+        return None
+    return resolve_managed(db, pinned)

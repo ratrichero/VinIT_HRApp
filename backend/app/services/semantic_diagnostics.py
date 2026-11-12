@@ -2,8 +2,7 @@
 
 The worker keeps assessment available when semantic retrieval fails.  These
 in-process counters make that fallback visible to operators instead of
-letting ``SEMANTIC_RETRIEVAL_ENABLED=true`` look like proof that BGE is
-healthy.  Only model/config metadata and error class names are recorded;
+mistaking configured intent for proof that BGE is healthy.  Only model/config metadata and error class names are recorded;
 never CV text, queries, endpoints with credentials or API keys.
 """
 
@@ -125,15 +124,21 @@ def record_semantic_run(
         _RUNTIME["last_run_at"] = _utc_now()
 
 
-def get_semantic_diagnostics() -> dict[str, Any]:
-    """Merge static configuration with this process's runtime counters."""
-    config = semantic_configuration()
+def get_semantic_counters() -> dict[str, Any]:
+    """Counters belong to this process only, never the entire worker fleet."""
     with _LOCK:
         runtime = dict(_RUNTIME)
     cache_total = int(runtime["cache_hits"]) + int(runtime["cache_misses"])
     runtime["cache_hit_rate"] = (
         round(int(runtime["cache_hits"]) / cache_total, 6) if cache_total else None
     )
+    return runtime
+
+
+def get_semantic_diagnostics() -> dict[str, Any]:
+    """Legacy environment diagnostics (not the managed worker control)."""
+    config = semantic_configuration()
+    runtime = get_semantic_counters()
     if config["configured_state"] in {"DISABLED", "MISCONFIGURED"}:
         state = config["configured_state"]
     elif runtime["runs"] == 0:

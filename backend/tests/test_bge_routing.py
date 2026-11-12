@@ -35,13 +35,14 @@ class FakeProvider:
 
 def test_managed_bge_fallback_recomputes_documents_and_queries_without_mixing(monkeypatch):
     import app.workers.processor as module
-    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", True)
-    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", True)
+    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", False)
+    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", False)
     primary, backup = FakeProvider("primary", True), FakeProvider("backup")
     routes = [
         {"config_id": "primary", "api_key_configured": True, "config": {"model_name": "same", "top_k": 5, "min_similarity": .5}},
         {"config_id": "backup", "api_key_configured": True, "config": {"model_name": "same", "top_k": 5, "min_similarity": .5}},
     ]
+    monkeypatch.setattr(module, "bge_pin_is_current", lambda db, chain: True)
     monkeypatch.setattr(module, "provider_for_pinned_route", lambda db, route: primary if route['config_id'] == 'primary' else backup)
     assert route_index_version(routes[0]) != route_index_version(routes[1])
     token = runtime_context.set({"bge_chain": {"route_set_id": "set", "routes": routes}})
@@ -80,17 +81,16 @@ def test_gates_and_all_provider_failures_leave_only_lexical(monkeypatch):
     primary, backup = FakeProvider("primary", True), FakeProvider("backup", True)
     routes = [{"config_id": name, "config": {"model_name": "same"}} for name in ("a", "b")]
     monkeypatch.setattr(module, "provider_for_pinned_route", lambda db, route: primary if route['config_id'] == 'a' else backup)
-    monkeypatch.setattr(module, "get_embedding_provider", lambda: (_ for _ in ()).throw(AssertionError("legacy endpoint must not be used")))
+    monkeypatch.setattr(module, "bge_pin_is_current", lambda db, chain: False)
     data = {"chunks": [{"chunk_id": "c", "text": "synthetic"}], "fallback_chunks": {"x": [{"chunk_id": "lexical"}]}}
     token = runtime_context.set({"bge_chain": {"routes": routes}})
     loop = asyncio.new_event_loop()
     try:
         worker = ProcessingWorker.__new__(ProcessingWorker)
         args = dict(application_id="a", document_id="d", deterministic_result=data, unresolved_criteria=[{"criterion_id": "x"}])
-        monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", False)
         assert worker._semantic_fallback_chunks(FailedDb(), loop, **args) == data['fallback_chunks']
         assert not primary.calls and not backup.calls
-        monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", True)
+        monkeypatch.setattr(module, "bge_pin_is_current", lambda db, chain: True)
         assert worker._semantic_fallback_chunks(FailedDb(), loop, **args) == data['fallback_chunks']
         assert primary.calls == ["document", "query"] and backup.calls == ["document", "query"]
         assert data['_semantic_route_used']['status'] == 'LEXICAL_FALLBACK'
@@ -141,6 +141,7 @@ def test_endpoint_policy_checked_per_route_before_synthetic_transport(monkeypatc
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs))
     routes = [{'config_id': name, 'config': {'api_base': base, 'model_name': 'test', 'min_similarity': 0}}
               for name, base in [('primary', 'https://public.test/v1'), ('backup', 'http://internal.test/v1')]]
+    monkeypatch.setattr(module, 'bge_pin_is_current', lambda db, chain: True)
     monkeypatch.setattr(module, 'provider_for_pinned_route', lambda db, route: BGEHttpEmbeddingProvider(
         api_base=route['config']['api_base'], api_key='', model='test', dimension=1024))
     data = {'chunks': [{'chunk_id': 'c', 'text': 'synthetic'}], 'fallback_chunks': {'x': []}}
@@ -151,6 +152,25 @@ def test_endpoint_policy_checked_per_route_before_synthetic_transport(monkeypatc
             application_id='a', document_id='d', deterministic_result=data, unresolved_criteria=[{'criterion_id': 'x', 'name': 'test'}])
         assert requests == ['internal.test', 'internal.test']
         assert data['_semantic_route_used']['route_config_id'] == 'backup'
+    finally:
+        loop.close()
+        runtime_context.reset(token)
+
+
+def test_missing_control_database_fails_closed_even_with_old_env_flags(monkeypatch):
+    import app.workers.processor as module
+    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", True)
+    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", True)
+    monkeypatch.setattr(module, "provider_for_pinned_route", lambda *args: (_ for _ in ()).throw(AssertionError("must not call provider")))
+    data = {"chunks": [{"chunk_id": "c", "text": "synthetic"}], "fallback_chunks": {"x": []}}
+    token = runtime_context.set({"bge_chain": {"route_set_id": "set", "routes": [{"config_id": "a", "config": {}}]}})
+    loop = asyncio.new_event_loop()
+    try:
+        result = ProcessingWorker.__new__(ProcessingWorker)._semantic_fallback_chunks(
+            FailedDb(), loop, application_id="a", document_id="d", deterministic_result=data,
+            unresolved_criteria=[{"criterion_id": "x"}])
+        assert result == data["fallback_chunks"]
+        assert data["_semantic_route_used"]["status"] == "LEXICAL_FALLBACK"
     finally:
         loop.close()
         runtime_context.reset(token)

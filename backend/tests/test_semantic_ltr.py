@@ -42,15 +42,16 @@ def test_semantic_fingerprint_is_disabled_by_default(monkeypatch):
 
 
 def test_semantic_fingerprint_changes_with_model(monkeypatch):
-    from app.core.config import settings
-
-    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", True)
-    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "BAAI/bge-m3")
-    monkeypatch.setattr(settings, "EMBEDDING_INDEX_VERSION", "bge-index-v1")
-    first = semantic_config_fingerprint()
-    monkeypatch.setattr(settings, "EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
-    assert semantic_config_fingerprint() != first
-    assert semantic_config_fingerprint()["model"].endswith("bge-large-en-v1.5")
+    from app.services.ai_config import runtime_context
+    route = {"config_id": "a", "config": {"model_name": "BAAI/bge-m3"}}
+    token = runtime_context.set({"bge_chain": {"route_set_id": "set", "routes": [route]}})
+    try:
+        import copy
+        first = copy.deepcopy(semantic_config_fingerprint())
+        route["config"]["model_name"] = "BAAI/bge-large-en-v1.5"
+        assert semantic_config_fingerprint() != first
+    finally:
+        runtime_context.reset(token)
 
 
 def test_normalize_and_cosine():
@@ -203,9 +204,10 @@ def test_worker_semantic_fallback_uses_in_memory_when_pgvector_fails(monkeypatch
     monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", True)
     monkeypatch.setattr(settings, "SEMANTIC_MIN_SIMILARITY", 0.1)
     monkeypatch.setattr(settings, "SEMANTIC_TOP_K", 5)
-    monkeypatch.setattr(
-        processor_module, "get_embedding_provider",
-        lambda: HashEmbeddingProvider(dimension=32))
+    from app.services.ai_config import runtime_context
+    monkeypatch.setattr(processor_module, "bge_pin_is_current", lambda db, chain: True)
+    monkeypatch.setattr(processor_module, "provider_for_pinned_route", lambda db, route: HashEmbeddingProvider(dimension=32))
+    token = runtime_context.set({"bge_chain": {"route_set_id": "test", "routes": [{"config_id": "test", "config": {}}]}})
     worker = ProcessingWorker.__new__(ProcessingWorker)
     loop = asyncio.new_event_loop()
     try:
@@ -229,6 +231,7 @@ def test_worker_semantic_fallback_uses_in_memory_when_pgvector_fails(monkeypatch
         )
     finally:
         loop.close()
+        runtime_context.reset(token)
     assert result["crit-1"][0]["chunk_id"] == "c1"
     assert result["crit-1"][0]["retrieval_source"] == "SEMANTIC"
 
@@ -305,7 +308,10 @@ def test_worker_semantic_embedding_cache_avoids_repeat_document_calls(monkeypatc
     monkeypatch.setattr(settings, "SEMANTIC_MIN_SIMILARITY", 0.1)
     monkeypatch.setattr(settings, "SEMANTIC_TOP_K", 5)
     provider = _CountingHashProvider()
-    monkeypatch.setattr(processor_module, "get_embedding_provider", lambda: provider)
+    from app.services.ai_config import runtime_context
+    monkeypatch.setattr(processor_module, "bge_pin_is_current", lambda db, chain: True)
+    monkeypatch.setattr(processor_module, "provider_for_pinned_route", lambda db, route: provider)
+    token = runtime_context.set({"bge_chain": {"route_set_id": "test", "routes": [{"config_id": "test", "config": {}}]}})
     worker = ProcessingWorker.__new__(ProcessingWorker)
     db = _FakeEmbeddingCacheDb()
     deterministic_result = {
@@ -332,6 +338,7 @@ def test_worker_semantic_embedding_cache_avoids_repeat_document_calls(monkeypatc
             assert result["crit-1"][0]["chunk_id"] == "c1"
     finally:
         loop.close()
+        runtime_context.reset(token)
     assert provider.document_batch_sizes == [2]
     diagnostics = get_semantic_diagnostics()
     assert diagnostics["runtime"]["cache_hits"] == 2
@@ -577,6 +584,15 @@ def test_ltr_features_from_criterion_aggregates():
     assert features["avg_evidence_strength"] == pytest.approx(0.4)
     assert features["mandatory_no_match"] == 1.0
     assert features["meets_mandatory"] == 1.0
+
+
+def test_ltr_scoring_rejects_nonfinite_intermediate_values():
+    artifact = train_ltr_model(_ltr_examples(), min_examples=30, min_groups=5, epochs=20)
+    artifact['stds'][0] = 1e-320
+    artifact['means'][0] = 0.0
+    model = LTRModel(artifact)
+    with pytest.raises(LTRError):
+        model.score({'matching_score': 1.0})
 
 
 def test_ltr_shadow_does_not_change_ranking_and_active_stays_inside_gate():

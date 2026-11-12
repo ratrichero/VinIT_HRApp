@@ -381,6 +381,9 @@ class LTRModel:
             (value - self.means[index]) / (self.stds[index] or 1.0)
             for index, value in enumerate(values)
         ]
-        return round(_sigmoid(sum(
-            weight * value for weight, value in zip(self.weights, standardized, strict=True)
-        )), 6)
+        if not all(math.isfinite(value) for value in standardized):
+            raise LTRError("LTR features cannot be scaled safely")
+        logit = sum(weight * value for weight, value in zip(self.weights, standardized, strict=True))
+        if not math.isfinite(logit):
+            raise LTRError("LTR score is not finite")
+        return round(_sigmoid(logit), 6)

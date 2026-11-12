@@ -187,7 +187,6 @@ class BGEHttpEmbeddingProvider:
             metadata={
                 "embedding_provider": self.name,
                 "embedding_kind": kind,
-                "embedding_index_version": settings.EMBEDDING_INDEX_VERSION,
                 "text_count": len(texts),
                 "total_characters": sum(len(text) for text in texts),
             },
@@ -239,26 +238,15 @@ def semantic_config_fingerprint() -> dict[str, Any] | None:
     (or changing its model) creates a new fingerprint cohort instead of
     reusing assessments produced without semantic candidates.
     """
-    if not settings.SEMANTIC_RETRIEVAL_ENABLED:
-        return None
-    from app.services.ai_config import runtime_context
+    from app.services.ai_config import runtime_context, runtime_snapshot
     runtime = runtime_context.get() or {}
-    if settings.ALLOW_MANAGED_BGE_ROUTING or runtime.get("bge_chain") is not None:
-        from app.services.ai_config import runtime_snapshot
-        return {"enabled": True, "managed_allowed": bool(settings.ALLOW_MANAGED_BGE_ROUTING),
-                "managed_routes": runtime_snapshot(runtime).get("bge_chain"),
-                "query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION or ""}
-    provider = get_embedding_provider()
-    return {
-        "enabled": True,
-        "provider": provider.name,
-        "model": provider.model,
-        "dimension": int(provider.dimension),
-        "index_version": settings.EMBEDDING_INDEX_VERSION,
-        "top_k": int(settings.SEMANTIC_TOP_K),
-        "min_similarity": float(settings.SEMANTIC_MIN_SIMILARITY),
-        "query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION or "",
-    }
+    chain = runtime.get("bge_chain")
+    if not isinstance(chain, dict) or chain.get("status") == "OFF":
+        return None
+    # A pinned or unavailable managed route is scoped per operation by
+    # semantic_reuse_scope, even if provider failures lead to lexical fallback.
+    return {"enabled": True, "managed_routes": runtime_snapshot(runtime).get("bge_chain"),
+            "query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION or ""}
 
 
 def semantic_reuse_scope(operation_id: str, semantic_config: dict[str, Any] | None) -> dict[str, str] | None:

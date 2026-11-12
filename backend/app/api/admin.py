@@ -19,6 +19,7 @@ from app.services.ai_config import (
     public_runtime,
     validate_runtime,
 )
+from app.services.ai_runtime_controls import lock_service_for_update, service_enabled, set_service_enabled
 from app.services.ai_secrets import (
     AISecretConfigurationError,
     AISecretError,
@@ -35,7 +36,7 @@ from app.services.langfuse_observability import get_observability_status
 from app.services.llm_client import LLMError, llm_client
 from app.services.ltr import LTRError, LTRModel, artifact_sha256
 from app.services.ltr_managed import approved_model, current_selection
-from app.services.semantic_diagnostics import get_semantic_diagnostics
+from app.services.semantic_diagnostics import get_semantic_counters
 
 router = APIRouter()
 
@@ -128,12 +129,14 @@ class LTRDraftRequest(BaseModel):
 
 class LTRSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["OFF", "SHADOW"]
+    mode: Literal["OFF", "SHADOW", "ACTIVE"]
     draft_config_id: UUID | None = None
+    model_version: str | None = Field(default=None, min_length=1, max_length=200)
     reason: str = Field(min_length=1, max_length=1000)
     shadow_approved: bool = False
+    active_approved: bool = False
 
-    @field_validator("reason", mode="before")
+    @field_validator("reason", "model_version", mode="before")
     @classmethod
     def _strip_reason(cls, value):
         return value.strip() if isinstance(value, str) else value
@@ -423,7 +426,7 @@ async def get_langfuse_health(current_user: dict = Depends(require_admin_role)):
 
 @router.get("/ai/auxiliary-drafts")
 async def list_auxiliary_drafts(current_user: dict = Depends(require_admin_role)):
-    """List drafts without ciphertext; no draft is connected to the worker."""
+    """List write-only credential drafts; activation is a separate action."""
     db = SessionLocal()
     try:
         rows = db.execute(text("""
@@ -490,8 +493,8 @@ async def get_bge_route_set(current_user: dict = Depends(require_admin_role)):
             chain = load_active_bge_chain(db)
         except EmbeddingError:
             chain = None
-        return {"route_set": chain, "semantic_enabled": bool(settings.SEMANTIC_RETRIEVAL_ENABLED),
-                "managed_routing_allowed": bool(settings.ALLOW_MANAGED_BGE_ROUTING)}
+        return {"route_set": chain, "enabled": service_enabled(db, "BGE"),
+                "worker_status": "unknown", "network_policy_external_allowed": bool(settings.ALLOW_EXTERNAL_API)}
     finally:
         db.close()
 
@@ -504,7 +507,7 @@ async def create_bge_route_set(request: BGERouteSetRequest, current_user: dict =
     db = SessionLocal()
     try:
         _lock_active_admin(db, current_user["user_id"])
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('hra-bge-activation', 418630021))"))
+        lock_service_for_update(db, "BGE")
         for route_id in ids:
             try:
                 route = load_bge_route(db, route_id)
@@ -515,6 +518,7 @@ async def create_bge_route_set(request: BGERouteSetRequest, current_user: dict =
             except (EmbeddingError, KeyError, ValueError, TypeError) as exc:
                 raise HTTPException(status_code=400, detail=f"Cấu hình BGE không hợp lệ: {type(exc).__name__}") from None
         db.execute(text("UPDATE app_private.bge_route_sets SET status='DISABLED', disabled_at=NOW() WHERE status='ACTIVE'"))
+        set_service_enabled(db, "BGE", True, current_user["user_id"])
         row = db.execute(text("""
             INSERT INTO app_private.bge_route_sets(route_config_ids, status, created_by)
             VALUES (CAST(:ids AS jsonb), 'ACTIVE', :user_id) RETURNING route_set_id
@@ -524,8 +528,28 @@ async def create_bge_route_set(request: BGERouteSetRequest, current_user: dict =
             VALUES (:user_id, 'SELECT_BGE_ROUTE_SET', 'BGE_ROUTE_SET', :id, 'ACTIVE')
         """), {"user_id": current_user["user_id"], "id": row["route_set_id"]})
         db.commit()
-        return {"route_set_id": str(row["route_set_id"]), "runtime_enabled":
-                bool(settings.SEMANTIC_RETRIEVAL_ENABLED and settings.ALLOW_MANAGED_BGE_ROUTING)}
+        return {"route_set_id": str(row["route_set_id"]), "enabled": True, "worker_status": "unknown"}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post("/ai/bge/disable")
+async def disable_bge(current_user: dict = Depends(require_admin_role)):
+    db = SessionLocal()
+    try:
+        _lock_active_admin(db, current_user["user_id"])
+        lock_service_for_update(db, "BGE")
+        set_service_enabled(db, "BGE", False, current_user["user_id"])
+        db.execute(text("UPDATE app_private.bge_route_sets SET status='DISABLED', disabled_at=NOW() WHERE status='ACTIVE'"))
+        db.execute(text("""
+            INSERT INTO app_private.audit_events(actor_user_id, action_type, object_type, outcome)
+            VALUES (:user, 'DISABLE_BGE', 'BGE_ROUTE_SET', 'OFF')
+        """), {"user": current_user["user_id"]})
+        db.commit()
+        return {"enabled": False, "worker_status": "unknown"}
     except Exception:
         db.rollback()
         raise
@@ -543,15 +567,22 @@ async def create_ltr_draft(request: LTRDraftRequest, current_user: dict = Depend
 
 @router.get("/semantic/health")
 async def get_semantic_health(current_user: dict = Depends(require_admin_role)):
-    """Configured/runtime semantic state for this API/worker process.
-
-    This intentionally does not call the embedding provider and never
-    returns the configured endpoint or API key.  ``READY_UNVERIFIED`` means
-    configuration is coherent but this process has not completed a semantic
-    run yet; ``DEGRADED_FALLBACK`` means the last attempt returned lexical
-    candidates because the provider failed.
-    """
-    return get_semantic_diagnostics()
+    """Database intent plus process-local counters, never proof of worker health."""
+    db = SessionLocal()
+    try:
+        enabled = service_enabled(db, "BGE")
+        state = "DISABLED"
+        if enabled:
+            try:
+                load_active_bge_chain(db)
+                state = "READY_UNVERIFIED"
+            except EmbeddingError:
+                state = "MISCONFIGURED"
+        return {"enabled": enabled, "state": state,
+                "worker_status": "unknown", "counter_scope": "this API process only",
+                "runtime": get_semantic_counters()}
+    finally:
+        db.close()
 
 
 @router.get("/audit/verify")
@@ -720,56 +751,82 @@ async def get_worker_health(current_user: dict = Depends(require_admin_role)):
 async def get_ltr_selection(current_user: dict = Depends(require_admin_role)):
     db = SessionLocal()
     try:
-        return {"selection": current_selection(db),
-                "managed_allowed": bool(settings.ALLOW_MANAGED_LTR_ROUTING),
-                "worker_mode_hint": settings.LTR_MODE}
+        return {"selection": current_selection(db), "enabled": service_enabled(db, "LTR"),
+                "worker_status": "unknown"}
     finally:
         db.close()
 
 
 @router.post("/ai/ltr/selection", status_code=201)
 async def select_ltr_shadow(request: LTRSelectionRequest, current_user: dict = Depends(require_admin_role)):
-    if request.mode == "SHADOW" and (not request.draft_config_id or not request.shadow_approved):
-        raise HTTPException(status_code=400, detail="Cần chọn draft và xác nhận phê duyệt phạm vi SHADOW")
-    if request.mode == "OFF" and request.draft_config_id:
-        raise HTTPException(status_code=400, detail="OFF không chọn draft")
+    if request.mode != "OFF" and bool(request.draft_config_id) == bool(request.model_version):
+        raise HTTPException(status_code=400, detail="Cần chọn một model hoặc draft LTR")
+    if request.mode == "SHADOW" and not request.shadow_approved:
+        raise HTTPException(status_code=400, detail="Cần xác nhận phê duyệt phạm vi SHADOW")
+    if request.mode == "ACTIVE" and not request.active_approved:
+        raise HTTPException(status_code=400, detail="Cần xác nhận phê duyệt ACTIVE, chất lượng và kế hoạch rollback")
+    if request.mode == "OFF" and (request.draft_config_id or request.model_version):
+        raise HTTPException(status_code=400, detail="OFF không chọn model hoặc draft")
     db = SessionLocal()
     try:
         _lock_active_admin(db, current_user["user_id"])
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('hra-ltr-selection', 418630021))"))
+        lock_service_for_update(db, "LTR")
         version, digest = None, None
-        if request.mode == "SHADOW":
-            row = db.execute(text("""
-                SELECT config, service_type FROM app_private.ai_auxiliary_config_drafts
-                WHERE config_id=:id FOR SHARE
-            """), {"id": str(request.draft_config_id)}).mappings().first()
-            if not row or row['service_type'] != 'LTR' or not isinstance(row['config'], dict) or row['config'].get('mode') != 'SHADOW':
-                raise HTTPException(status_code=400, detail="Chỉ được chọn draft LTR SHADOW")
-            version = row['config'].get('model_version')
+        draft_id = str(request.draft_config_id) if request.draft_config_id else None
+        if request.mode != "OFF":
+            if draft_id:
+                row = db.execute(text("""
+                    SELECT config, service_type FROM app_private.ai_auxiliary_config_drafts
+                    WHERE config_id=:id FOR SHARE
+                """), {"id": draft_id}).mappings().first()
+                if not row or row['service_type'] != 'LTR' or not isinstance(row['config'], dict) or row['config'].get('mode') != request.mode:
+                    raise HTTPException(status_code=400, detail="Draft LTR không khớp chế độ lựa chọn")
+                version = row['config'].get('model_version')
+            else:
+                version = request.model_version
             if not isinstance(version, str) or not version:
-                raise HTTPException(status_code=400, detail="Draft LTR thiếu model version")
+                raise HTTPException(status_code=400, detail="Cấu hình LTR thiếu model version")
             try:
                 model = approved_model(db, version, lock=True)
                 digest = model.artifact_sha256
             except (LTRError, ValueError, TypeError, KeyError):
                 raise HTTPException(status_code=409, detail="Model LTR chưa được phê duyệt hoặc không đạt kiểm tra artifact/gate") from None
+            if request.mode == "ACTIVE":
+                observed = db.execute(text("""
+                    SELECT 1 FROM app_private.ranking_runs r
+                    JOIN app_private.ltr_managed_selections s ON s.selection_id=r.ltr_selection_id
+                    WHERE r.status='COMPLETED' AND r.ltr_mode='SHADOW'
+                      AND s.model_version=:version AND s.artifact_sha256=:digest
+                      AND EXISTS (SELECT 1 FROM app_private.ranking_items i
+                                  WHERE i.ranking_run_id=r.ranking_run_id AND i.ltr_score IS NOT NULL
+                                    AND i.ltr_score::text NOT IN ('NaN', 'Infinity', '-Infinity'))
+                    LIMIT 1
+                """), {"version": version, "digest": digest}).first()
+                if not observed:
+                    raise HTTPException(status_code=409, detail="Cần có ít nhất một ranking SHADOW hoàn tất với đúng artifact trước ACTIVE")
+            if not draft_id:
+                draft_id = str(db.execute(text("""
+                    INSERT INTO app_private.ai_auxiliary_config_drafts(service_type, config, created_by)
+                    VALUES ('LTR', CAST(:config AS jsonb), :user) RETURNING config_id
+                """), {"config": json.dumps({"mode": request.mode, "model_version": version}),
+                        "user": current_user['user_id']}).scalar_one())
         db.execute(text("UPDATE app_private.ltr_managed_selections SET current=false, retired_at=NOW() WHERE current"))
         selection_id = db.execute(text("""
             INSERT INTO app_private.ltr_managed_selections
                 (draft_config_id, mode, model_version, artifact_sha256, reason, created_by)
             VALUES (:draft_id, :mode, :model, :hash, :reason, :user_id) RETURNING selection_id
-        """), {"draft_id": str(request.draft_config_id) if request.draft_config_id else None,
-               "mode": request.mode, "model": version, "hash": digest, "reason": request.reason,
-               "user_id": current_user['user_id']}).scalar_one()
+        """), {"draft_id": draft_id, "mode": request.mode, "model": version, "hash": digest,
+               "reason": request.reason, "user_id": current_user['user_id']}).scalar_one()
+        set_service_enabled(db, "LTR", request.mode != "OFF", current_user['user_id'])
         db.execute(text("""
             INSERT INTO app_private.audit_events(actor_user_id, action_type, object_type, object_id, outcome, metadata)
             VALUES (:user, 'SELECT_LTR_MANAGED', 'LTR_SELECTION', :id, :mode, CAST(:metadata AS jsonb))
         """), {"user": current_user['user_id'], "id": selection_id, "mode": request.mode,
-                "metadata": json.dumps({"model_version": version, "artifact_sha256": digest, "reason": request.reason})})
+                "metadata": json.dumps({"model_version": version, "artifact_sha256": digest, "reason": request.reason,
+                                        "active_approved": request.active_approved})})
         db.commit()
         return {"selection_id": str(selection_id), "mode": request.mode,
-                "runtime_enabled_in_api_process": bool(request.mode == 'SHADOW' and settings.ALLOW_MANAGED_LTR_ROUTING
-                                                       and (settings.LTR_MODE or '').upper() == 'SHADOW')}
+                "enabled": request.mode != "OFF", "worker_status": "unknown"}
     except Exception:
         db.rollback()
         raise

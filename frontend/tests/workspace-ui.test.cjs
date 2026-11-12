@@ -53,3 +53,15 @@ test('intake validation marks duplicates as warnings and invalid files as blocke
   assert.equal(result.items[3].status, 'INVALID');
   assert.match(result.batchError, /chưa hợp lệ/);
 });
+
+
+test('route priority can be moved without changing or duplicating the original list', () => {
+  const { moveRoute } = loadTypeScriptModule('src/lib/orderedRoutes.ts');
+  const routes = ['first', 'second', 'third'];
+  assert.deepEqual(moveRoute(routes, 1, -1), ['second', 'first', 'third']);
+  assert.deepEqual(moveRoute(routes, 1, 1), ['first', 'third', 'second']);
+  assert.deepEqual(routes, ['first', 'second', 'third']);
+  assert.deepEqual(moveRoute(routes, 0, -1), routes);
+  assert.deepEqual(moveRoute(routes, 2, 1), routes);
+  assert.deepEqual(moveRoute(routes, -1, 1), routes);
+});

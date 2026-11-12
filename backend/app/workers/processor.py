@@ -28,12 +28,13 @@ from app.services.llm_client import (
 from app.services.matching import matching_engine
 from app.services.deterministic_matching import deterministic_matcher
 from app.services.embedding import (
-    chunk_text_sha256, get_embedding_provider, parse_vector_literal,
+    chunk_text_sha256, parse_vector_literal,
     requirement_query_text, semantic_config_fingerprint, semantic_reuse_scope, vector_literal,
 )
 from app.services.semantic_diagnostics import record_semantic_run
 from app.services.ltr import LTRModel, artifact_sha256, extract_ranking_features
-from app.services.ltr_managed import current_selection, resolve_shadow
+from app.services.ltr_managed import current_selection, resolve_managed
+from app.services.ai_runtime_controls import bge_pin_is_current, service_enabled
 from app.services.semantic_retrieval import merge_candidate_chunks, retrieve_semantic_candidates
 from app.services.redaction import redact_text
 from app.services.ai_config import (
@@ -209,21 +210,21 @@ class ProcessingWorker:
             token = str(uuid4())
             backend_pid = db.execute(text("SELECT pg_backend_pid()")).scalar_one()
             runtime = chosen["ai_config_snapshot"] or get_active_runtime(db)
-            if (not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT"}
-                    and settings.SEMANTIC_RETRIEVAL_ENABLED and settings.ALLOW_MANAGED_BGE_ROUTING):
+            if not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT"}:
                 try:
                     with db.begin_nested():
-                        runtime["bge_chain"] = load_active_bge_chain(db)
+                        runtime["bge_chain"] = (load_active_bge_chain(db) if service_enabled(db, "BGE")
+                                                else {"routes": [], "status": "OFF"})
                 except Exception as exc:
-                    logger.warning("Managed BGE route set unavailable; using lexical retrieval", error_type=type(exc).__name__)
+                    logger.warning("Managed BGE unavailable; using lexical retrieval", error_type=type(exc).__name__)
                     runtime["bge_chain"] = {"routes": [], "status": "UNAVAILABLE"}
-            if (not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT", "RANKING"}
-                    and settings.ALLOW_MANAGED_LTR_ROUTING):
+            if not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT", "RANKING"}:
                 try:
                     with db.begin_nested():
-                        runtime["ltr_selection"] = current_selection(db) or {"mode": "OFF"}
+                        runtime["ltr_selection"] = ((current_selection(db) or {"mode": "OFF"})
+                                                    if service_enabled(db, "LTR") else {"mode": "OFF"})
                 except Exception as exc:
-                    logger.warning("Managed LTR selection unavailable; ranking unchanged", error_type=type(exc).__name__)
+                    logger.warning("Managed LTR unavailable; ranking unchanged", error_type=type(exc).__name__)
                     runtime["ltr_selection"] = {"mode": "OFF"}
             # Snapshots contain no secrets. Each route rehydrates its own key
             # only when attempted, so a broken primary key can fail over.
@@ -791,24 +792,28 @@ class ProcessingWorker:
             criterion_id: list(chunks)
             for criterion_id, chunks in (deterministic_result.get("fallback_chunks") or {}).items()
         }
-        if not settings.SEMANTIC_RETRIEVAL_ENABLED or not unresolved_criteria:
+        if not unresolved_criteria:
             return fallback
         chunks = [chunk for chunk in deterministic_result.get("chunks", []) if isinstance(chunk, dict)]
         if not chunks:
             return fallback
         chain = (runtime_context.get() or {}).get("bge_chain")
-        # A resumed managed operation must never silently switch to the legacy
-        # endpoint if its gate is disabled or its pinned chain is unavailable.
-        if chain is not None and not settings.ALLOW_MANAGED_BGE_ROUTING:
+        # Old/unavailable snapshots never fall through to the legacy endpoint.
+        try:
+            with db.begin_nested():
+                allowed = bge_pin_is_current(db, chain)
+        except Exception as exc:
+            logger.warning("BGE control unavailable; using lexical retrieval", error_type=type(exc).__name__)
+            allowed = False
+        if not allowed:
             deterministic_result["_semantic_route_used"] = {"status": "LEXICAL_FALLBACK"}
             return fallback
-        if settings.ALLOW_MANAGED_BGE_ROUTING:
-            routes = chain.get("routes", []) if isinstance(chain, dict) else []
-        else:
-            routes = [None]
+        routes = chain.get("routes", []) if isinstance(chain, dict) else []
         for index, route in enumerate(routes):
             try:
-                provider = provider_for_pinned_route(db, route) if route else get_embedding_provider()
+                if not isinstance(route, dict):
+                    continue
+                provider = provider_for_pinned_route(db, route)
                 config = route.get("config", {}) if route else {}
                 result = self._semantic_fallback_one(
                     db, loop, application_id=application_id, document_id=document_id,
@@ -1292,10 +1297,7 @@ class ProcessingWorker:
                                 "assessment_id": str(assessment_id),
                                 "assessment_fingerprint": assessment_fingerprint,
                                 "unresolved_criterion_count": len(unresolved_criteria),
-                                "semantic_enabled": bool(settings.SEMANTIC_RETRIEVAL_ENABLED),
-                                "embedding_provider": settings.EMBEDDING_PROVIDER,
-                                "embedding_model": settings.EMBEDDING_MODEL,
-                                "embedding_index_version": settings.EMBEDDING_INDEX_VERSION,
+                                "semantic_routes_pinned": len((runtime_context.get() or {}).get("bge_chain", {}).get("routes", [])),
                             },
                         ) as semantic_observation:
                             fallback_chunks = self._semantic_fallback_chunks(
@@ -1530,7 +1532,7 @@ class ProcessingWorker:
                 "position_id": position_id,
                 "criteria_version_id": criteria_version_id,
                 "ranking_policy_version": settings.RANKING_POLICY_VERSION,
-                "ltr_mode": settings.LTR_MODE,
+                "ltr_mode_pinned": (runtime_context.get() or {}).get("ltr_selection", {}).get("mode", "OFF"),
             },
         ):
             self._generate_ranking(operation_id, db, criteria_version_id=criteria_version_id)
@@ -1573,37 +1575,37 @@ class ProcessingWorker:
                              "matching_status": row["matching_status"], "matching_score": row["matching_score"],
                              "evidence_coverage": row["evidence_coverage"]}} for row in rows]
         pinned_ltr = (runtime_context.get() or {}).get("ltr_selection")
-        managed_ltr = settings.ALLOW_MANAGED_LTR_ROUTING or pinned_ltr is not None
-        if managed_ltr:
-            try:
-                with db.begin_nested():
-                    ltr_model = resolve_shadow(db, pinned_ltr)
-            except Exception as exc:
-                logger.warning("Managed LTR unavailable; ranking unchanged", error_type=type(exc).__name__)
-                ltr_model = None
-            ltr_mode = "SHADOW" if ltr_model else "OFF"
-        else:
-            ltr_model = self._load_ltr_model(db)
-            ltr_mode = (settings.LTR_MODE or "OFF").upper() if ltr_model else "OFF"
+        try:
+            with db.begin_nested():
+                ltr_model = resolve_managed(db, pinned_ltr)
+        except Exception as exc:
+            logger.warning("Managed LTR unavailable; ranking unchanged", error_type=type(exc).__name__)
+            ltr_model = None
+        ltr_mode = pinned_ltr['mode'] if ltr_model else "OFF"
         ltr_scores: dict[str, float] = {}
         if ltr_model:
-            assessment_ids = [str(item["latest_assessment"]["assessment_id"]) for item in applications]
-            if assessment_ids:
-                feature_rows = db.execute(text("""
-                    SELECT cr.assessment_id::text AS assessment_id, cr.outcome, cr.decision_source,
-                           cr.evidence_strength, ci.category
-                    FROM app_private.criterion_assessment_results cr
-                    JOIN app_private.criteria_items ci ON ci.criterion_id = cr.criterion_id
-                    WHERE cr.assessment_id = ANY(CAST(:assessment_ids AS uuid[]))
-                """), {"assessment_ids": assessment_ids}).mappings().all()
-                results_by_assessment: dict[str, list[dict]] = {}
-                for row in feature_rows:
-                    results_by_assessment.setdefault(str(row["assessment_id"]), []).append(dict(row))
-                for item in applications:
-                    assessment = item["latest_assessment"]
-                    features = extract_ranking_features(
-                        assessment, results_by_assessment.get(str(assessment["assessment_id"]), []))
-                    ltr_scores[str(item["application_id"])] = ltr_model.score(features)
+            try:
+                with db.begin_nested():
+                    assessment_ids = [str(item["latest_assessment"]["assessment_id"]) for item in applications]
+                    if assessment_ids:
+                        feature_rows = db.execute(text("""
+                            SELECT cr.assessment_id::text AS assessment_id, cr.outcome, cr.decision_source,
+                                   cr.evidence_strength, ci.category
+                            FROM app_private.criterion_assessment_results cr
+                            JOIN app_private.criteria_items ci ON ci.criterion_id = cr.criterion_id
+                            WHERE cr.assessment_id = ANY(CAST(:assessment_ids AS uuid[]))
+                        """), {"assessment_ids": assessment_ids}).mappings().all()
+                        results_by_assessment: dict[str, list[dict]] = {}
+                        for row in feature_rows:
+                            results_by_assessment.setdefault(str(row["assessment_id"]), []).append(dict(row))
+                        for item in applications:
+                            assessment = item["latest_assessment"]
+                            features = extract_ranking_features(
+                                assessment, results_by_assessment.get(str(assessment["assessment_id"]), []))
+                            ltr_scores[str(item["application_id"])] = ltr_model.score(features)
+            except Exception as exc:
+                logger.warning("Managed LTR scoring failed; ranking unchanged", error_type=type(exc).__name__)
+                ltr_model, ltr_mode, ltr_scores = None, "OFF", {}
         ranked = matching_engine.rank_applications(
             applications, [], ltr_scores=ltr_scores, ltr_mode=ltr_mode)
         ranking_run_id = db.execute(text("""
@@ -1618,7 +1620,7 @@ class ProcessingWorker:
                 "operation_id": str(operation_id), "ai_config_id": (runtime_context.get() or {}).get("config_id"),
                 "ltr_model_version": ltr_model.model_version if ltr_model else None,
                 "ltr_mode": ltr_mode,
-                "ltr_selection_id": pinned_ltr.get("selection_id") if managed_ltr and ltr_model else None}).scalar_one()
+                "ltr_selection_id": pinned_ltr.get("selection_id") if ltr_model else None}).scalar_one()
         for item in ranked:
             assessment = item["latest_assessment"]
             db.execute(text("""

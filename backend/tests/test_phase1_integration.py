@@ -26,6 +26,7 @@ def seed():
         # Only positions (and dependent data) are truncated; the default scoring policy remains intact.
         conn.execute(text("TRUNCATE app_private.positions CASCADE"))
         conn.execute(text("TRUNCATE app_private.departments CASCADE"))
+        conn.execute(text("INSERT INTO app_private.ai_runtime_controls(service_type, enabled) VALUES ('BGE', false), ('LTR', false) ON CONFLICT (service_type) DO UPDATE SET enabled=false, updated_by=NULL"))
         conn.execute(text("UPDATE app_private.ai_configuration_versions SET status='DISABLED' WHERE status='ACTIVE'"))
         for key in ("hr", "hm", "other", "hr2"):
             conn.execute(text("INSERT INTO auth.users(id) VALUES (:id)"), {"id": ids[key]})
@@ -78,6 +79,17 @@ def create_test_department():
             VALUES ('Phòng Công nghệ thông tin', 'REQ-IT-{SEQ:000}')
             RETURNING department_id
         """)).scalar_one())
+
+
+def test_managed_controls_default_off_and_are_backend_only(seed):
+    with engine.connect() as conn:
+        controls = conn.execute(text("SELECT service_type, enabled FROM app_private.ai_runtime_controls ORDER BY service_type")).all()
+        assert controls == [('BGE', False), ('LTR', False)]
+        assert not conn.execute(text("SELECT has_table_privilege('anon', 'app_private.ai_runtime_controls', 'SELECT')")).scalar_one()
+        assert not conn.execute(text("SELECT has_table_privilege('authenticated', 'app_private.ai_runtime_controls', 'SELECT')")).scalar_one()
+        assert conn.execute(text("SELECT has_table_privilege('service_role', 'app_private.ai_runtime_controls', 'SELECT')")).scalar_one()
+        assert conn.execute(text("SELECT has_column_privilege('service_role', 'app_private.ai_runtime_controls', 'enabled', 'UPDATE')")).scalar_one()
+        assert not conn.execute(text("SELECT has_table_privilege('service_role', 'app_private.ai_runtime_controls', 'DELETE')")).scalar_one()
 
 
 def test_position_scope_and_dashboard_counts(client, seed):
@@ -817,8 +829,8 @@ def test_assessment_reuse_rule_first_and_fallback_chunks(client, seed, tmp_path,
     import app.workers.processor as processor_module
     from app.services.embedding import EmbeddingError
     monkeypatch.setattr(settings, "LOCAL_STORAGE_PATH", str(tmp_path))
-    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", semantic_enabled)
-    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", semantic_enabled)
+    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", False)
+    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", False)
     state = {"primary_fails": True}
     calls = []
     chain = {"route_set_id": "synthetic-set", "routes": [
@@ -833,6 +845,9 @@ def test_assessment_reuse_rule_first_and_fallback_chunks(client, seed, tmp_path,
                 raise EmbeddingError('synthetic')
             return [[1.0, 0.0] + [0.0] * 1022 for _ in texts]
     monkeypatch.setattr(processor_module, 'load_active_bge_chain', lambda db: chain)
+    monkeypatch.setattr(processor_module, 'bge_pin_is_current', lambda db, pin: bool(semantic_enabled and pin == chain))
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.ai_runtime_controls SET enabled=:enabled WHERE service_type='BGE'"), {"enabled": semantic_enabled})
     monkeypatch.setattr(processor_module, 'provider_for_pinned_route', lambda db, route: Provider(route['config_id']))
     fallback_criterion = uid()
     with engine.begin() as conn:
@@ -2229,7 +2244,13 @@ def test_bge_route_set_is_ordered_audited_and_gated(client, seed, monkeypatch):
     assert client.post(path, headers=admin, json={"route_config_ids": ids * 2, "destinations_approved": True}).status_code == 422
     response = client.post(path, headers=admin, json={"route_config_ids": ids, "destinations_approved": True})
     assert response.status_code == 201, response.text
-    assert response.json()['runtime_enabled'] is False
+    assert response.json()['enabled'] is True  # database control replaces legacy env flags
+    # Egress policy is still enforced and an invalid change is atomic.
+    monkeypatch.setattr(settings, "ALLOW_EXTERNAL_API", False)
+    denied = client.post(path, headers=admin, json={"route_config_ids": ids, "destinations_approved": True})
+    assert denied.status_code == 400
+    assert client.get(path, headers=admin).json()['route_set']['route_set_id'] == response.json()['route_set_id']
+    monkeypatch.setattr(settings, "ALLOW_EXTERNAL_API", True)
     selection = client.get(path, headers=admin)
     assert [r['config_id'] for r in selection.json()['route_set']['routes']] == ids
     assert 'synthetic-key' not in selection.text
@@ -2264,6 +2285,36 @@ def test_bge_route_set_is_ordered_audited_and_gated(client, seed, monkeypatch):
     with pytest.raises(DBAPIError):
         with engine.begin() as conn:
             conn.execute(text("UPDATE app_private.bge_route_sets SET route_config_ids='[]'::jsonb WHERE route_set_id=:id"), {'id': results[0].json()['route_set_id']})
+    from app.services.ai_runtime_controls import bge_pin_is_current, service_enabled
+    db = SessionLocal()
+    try:
+        current = load_active_bge_chain(db)
+        assert service_enabled(db, 'BGE') and bge_pin_is_current(db, current)
+        assert not bge_pin_is_current(db, {**current, 'routes': current['routes'][::-1]})
+        assert not bge_pin_is_current(db, restored)
+        db.rollback()
+    finally:
+        db.close()
+    assert client.post('/v1/admin/ai/bge/disable', headers=headers(seed['hr'])).status_code == 403
+    assert client.post('/v1/admin/ai/bge/disable', headers=admin).status_code == 200
+    assert client.get(path, headers=admin).json()['enabled'] is False
+    db = SessionLocal()
+    try:
+        assert not bge_pin_is_current(db, current)
+        assert not service_enabled(db, 'BGE')
+    finally:
+        db.close()
+    # Re-enabling creates a new identity: a recovered old pin cannot revive.
+    assert client.post(path, headers=admin, json={"route_config_ids": ids, "destinations_approved": True}).status_code == 201
+    db = SessionLocal()
+    try:
+        assert not bge_pin_is_current(db, current)
+        assert bge_pin_is_current(db, load_active_bge_chain(db))
+    finally:
+        db.close()
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='DISABLE_BGE' AND actor_user_id=:user"), {'user': seed['other']}).scalar_one() == 1
+
 
 
 def test_bge_pgvector_ignores_stale_chunk_hash_even_when_hash_matches_another_chunk(seed, monkeypatch):
@@ -2346,9 +2397,10 @@ def test_ltr_managed_shadow_approval_gates_rollback_and_worker(client, seed, tmp
     assert client.post(select, headers=admin, json=body).status_code == 409  # DRAFT is not approved
     assert client.post(select, headers=headers(seed['hr']), json=body).status_code == 403
     assert client.post(select, headers=admin, json={**body, 'shadow_approved': False}).status_code == 400
-    assert client.post(select, headers=admin, json={**body, 'mode': 'ACTIVE'}).status_code == 422
+    assert client.post(select, headers=admin, json={'mode': 'ACTIVE', 'model_version': version, 'reason': 'synthetic', 'active_approved': True}).status_code == 409
     review = client.post(f'/v1/admin/ltr/models/{version}/approve', headers=admin, json={'reason': 'synthetic review only'})
     assert review.status_code == 200, review.text
+    assert client.post(select, headers=admin, json={'mode': 'ACTIVE', 'model_version': version, 'reason': 'synthetic', 'active_approved': True}).status_code == 409  # no scored SHADOW yet
     selected = client.post(select, headers=admin, json=body)
     assert selected.status_code == 201, selected.text
     selection_id = selected.json()['selection_id']
@@ -2358,14 +2410,11 @@ def test_ltr_managed_shadow_approval_gates_rollback_and_worker(client, seed, tmp
         assert runtime_snapshot({'ltr_selection': pinned})['ltr_selection'] == pinned
         assert resolve_shadow(db, pinned).model_version == version
         db.rollback()
-        monkeypatch.setattr(settings, 'LTR_MODE', 'ACTIVE')
-        assert resolve_shadow(db, pinned) is None  # managed ACTIVE is not implemented
+        # Legacy environment flags no longer enable or disable managed LTR.
         monkeypatch.setattr(settings, 'LTR_MODE', 'OFF')
-        assert resolve_shadow(db, pinned) is None
-        monkeypatch.setattr(settings, 'LTR_MODE', 'SHADOW')
         monkeypatch.setattr(settings, 'ALLOW_MANAGED_LTR_ROUTING', False)
-        assert resolve_shadow(db, pinned) is None
-        monkeypatch.setattr(settings, 'ALLOW_MANAGED_LTR_ROUTING', True)
+        assert resolve_shadow(db, pinned).model_version == version
+        db.rollback()
     finally:
         db.close()
 
@@ -2436,11 +2485,57 @@ def test_ltr_managed_shadow_approval_gates_rollback_and_worker(client, seed, tmp
                                   'evidence_coverage': row['evidence_coverage']}} for row in rows], [])
         assert {str(row['application_id']): row['rank_number'] for row in rows} == {str(row['application_id']): row['rank_number'] for row in baseline}
         assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE object_id=:id AND action_type='SELECT_LTR_MANAGED'"), {'id': selection_id}).scalar_one() == 1
+    active_body = {'mode': 'ACTIVE', 'model_version': version, 'reason': 'synthetic active approval', 'active_approved': True}
+    assert client.post(select, headers=headers(seed['hr']), json=active_body).status_code == 403
+    assert client.post(select, headers=admin, json={**active_body, 'active_approved': False}).status_code == 400
+    active = client.post(select, headers=admin, json=active_body)
+    assert active.status_code == 201, active.text
+    active_id = active.json()['selection_id']
+    assert client.get(select, headers=admin).json()['enabled'] is True
+    from app.services.ltr_managed import resolve_managed
+    db = SessionLocal()
+    try:
+        active_pin = current_selection(db)
+        assert active_pin['mode'] == 'ACTIVE'
+        assert resolve_shadow(db, active_pin) is None
+        assert resolve_managed(db, active_pin).model_version == version
+        assert resolve_managed(db, pinned) is None  # selection changed
+        from sqlalchemy.exc import OperationalError
+        with engine.connect() as contender:
+            contender.execute(text("SET LOCAL lock_timeout='150ms'"))
+            with pytest.raises(OperationalError):
+                contender.execute(text("UPDATE app_private.ai_runtime_controls SET enabled=false WHERE service_type='LTR'"))
+            contender.rollback()
+    finally:
+        db.rollback(); db.close()
+    queued_active = client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed['hr']))
+    assert queued_active.status_code == 202
+    worker._process_pending_operations()
+    with engine.connect() as conn:
+        run = conn.execute(text("SELECT ltr_mode, ltr_selection_id, ltr_model_version FROM app_private.ranking_runs WHERE operation_id=:id"), {'id': queued_active.json()['operation_id']}).mappings().one()
+        assert run['ltr_mode'] == 'ACTIVE' and str(run['ltr_selection_id']) == active_id and run['ltr_model_version'] == version
+        assert conn.execute(text("SELECT count(*) FROM app_private.ranking_items WHERE ranking_run_id=(SELECT ranking_run_id FROM app_private.ranking_runs WHERE operation_id=:id) AND ltr_score IS NOT NULL"), {'id': queued_active.json()['operation_id']}).scalar_one() == 2
+    # Scoring errors in ACTIVE must publish the deterministic fallback, not a
+    # partial/invalid LTR order, while leaving the control selection untouched.
+    from app.services.ltr import LTRModel
+    with monkeypatch.context() as patch:
+        def fail_score(self, features):
+            raise ValueError('synthetic score failure')
+        patch.setattr(LTRModel, 'score', fail_score)
+        failed_scoring = client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed['hr']))
+        assert failed_scoring.status_code == 202
+        worker._process_pending_operations()
+    with engine.connect() as conn:
+        fallback_run = conn.execute(text("SELECT ltr_mode, ltr_selection_id, ranking_run_id FROM app_private.ranking_runs WHERE operation_id=:id"), {'id': failed_scoring.json()['operation_id']}).mappings().one()
+        assert fallback_run['ltr_mode'] == 'OFF' and fallback_run['ltr_selection_id'] is None
+        assert conn.execute(text("SELECT count(*) FROM app_private.ranking_items WHERE ranking_run_id=:id AND ltr_score IS NOT NULL"), {'id': fallback_run['ranking_run_id']}).scalar_one() == 0
+    assert client.get(select, headers=admin).json()['selection']['selection_id'] == active_id
     off = client.post(select, headers=admin, json={'mode': 'OFF', 'reason': 'synthetic rollback'})
     assert off.status_code == 201
     db = SessionLocal()
     try:
         assert resolve_shadow(db, pinned) is None  # old pin cannot revive a retired selection
+        assert resolve_managed(db, active_pin) is None
     finally:
         db.close()
     queued = client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed['hr']))
