@@ -2544,3 +2544,45 @@ def test_ltr_managed_shadow_approval_gates_rollback_and_worker(client, seed, tmp
     with engine.connect() as conn:
         row = conn.execute(text("SELECT ltr_mode, ltr_selection_id FROM app_private.ranking_runs WHERE operation_id=:id"), {'id': queued.json()['operation_id']}).mappings().one()
         assert row['ltr_mode'] == 'OFF' and row['ltr_selection_id'] is None
+
+
+def test_cloudflare_reranker_controls_are_explicit_audited_and_fail_closed(client, seed, monkeypatch):
+    from cryptography.fernet import Fernet
+    from app.core.config import settings
+    from app.db.database import SessionLocal
+    from app.services.reranker import current_reranker, provider_for_pin, RerankerError
+    monkeypatch.setattr(settings, 'AI_CONFIG_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, 'ALLOW_EXTERNAL_API', True)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.reranker_selections SET current=false, retired_at=NOW() WHERE current"))
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {'id': seed['other']})
+        assert not conn.execute(text("SELECT has_table_privilege('authenticated','app_private.reranker_selections','SELECT')")).scalar_one()
+        assert not conn.execute(text("SELECT has_table_privilege('service_role','app_private.reranker_selections','DELETE')")).scalar_one()
+    admin = headers(seed['other'])
+    body = {'provider_name': 'Synthetic Cloudflare', 'model_name': '@cf/baai/bge-m3',
+            'api_base': 'https://api.cloudflare.com/client/v4/accounts/' + 'a'*32 + '/ai/v1',
+            'api_key': 'synthetic-secret', 'dimension': 1024, 'index_version': 'test'}
+    created = client.post('/v1/admin/ai/bge/drafts', headers=admin, json=body)
+    assert created.status_code == 201, created.text
+    cid = created.json()['config_id']
+    path = '/v1/admin/ai/reranker'
+    assert client.get(path, headers=admin).json()['enabled'] is False
+    assert client.post(path+'/enable', headers=headers(seed['hr']), json={'bge_config_id': cid, 'destinations_approved': True}).status_code == 403
+    assert client.post(path+'/enable', headers=admin, json={'bge_config_id': cid}).status_code == 400
+    monkeypatch.setattr(settings, 'ALLOW_EXTERNAL_API', False)
+    assert client.post(path+'/enable', headers=admin, json={'bge_config_id': cid, 'destinations_approved': True}).status_code == 400
+    monkeypatch.setattr(settings, 'ALLOW_EXTERNAL_API', True)
+    enabled = client.post(path+'/enable', headers=admin, json={'bge_config_id': cid, 'destinations_approved': True})
+    assert enabled.status_code == 201, enabled.text
+    assert 'synthetic-secret' not in client.get(path, headers=admin).text
+    db = SessionLocal()
+    try:
+        pinned = current_reranker(db)
+        assert provider_for_pin(db, pinned)[1] == 'synthetic-secret'
+        assert client.post(path+'/disable', headers=admin).status_code == 200
+        with pytest.raises(RerankerError): provider_for_pin(db, pinned)
+    finally:
+        db.close()
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='ENABLE_RERANKER' AND object_id=:id"), {'id': enabled.json()['selection_id']}).scalar_one() == 1
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='DISABLE_RERANKER' AND actor_user_id=:id"), {'id': seed['other']}).scalar_one() == 1

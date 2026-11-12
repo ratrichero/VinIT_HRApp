@@ -52,6 +52,9 @@ export default function AdminPage() {
   const [bgeRouteIds, setBgeRouteIds] = useState<string[]>([]);
   const [bgeApproved, setBgeApproved] = useState(false);
   const [bgeRuntimeEnabled, setBgeRuntimeEnabled] = useState(false);
+  const [rerankerSelection, setRerankerSelection] = useState<{ bge_config_id: string } | null>(null);
+  const [rerankerDraft, setRerankerDraft] = useState('');
+  const [rerankerApproved, setRerankerApproved] = useState(false);
   const [bgeConfigured, setBgeConfigured] = useState(false);
   const [ltrVersion, setLtrVersion] = useState('');
   const [ltrSelection, setLtrSelection] = useState<LtrSelection | null>(null);
@@ -75,11 +78,12 @@ export default function AdminPage() {
   const load = useCallback(async (sync: { llm?: boolean; bge?: boolean } = { llm: true, bge: true }) => {
     try {
       setLoading(true); setError(null);
-      const [active, worker, permitted, history, auxiliary, models, bgeSet, ltrSelected] = await Promise.all([
+      const [active, worker, permitted, history, auxiliary, models, bgeSet, ltrSelected, reranker] = await Promise.all([
         adminApi.getActiveAiConfig(), adminApi.getWorkerHealth(), adminApi.getAiOptions(), adminApi.listAiConfigs(),
-        adminApi.listAuxiliaryDrafts(), adminApi.listLtrModels(), adminApi.getBgeRouteSet(), adminApi.getLtrSelection(),
+        adminApi.listAuxiliaryDrafts(), adminApi.listLtrModels(), adminApi.getBgeRouteSet(), adminApi.getLtrSelection(), adminApi.getReranker(),
       ]);
       setAuxDrafts(auxiliary.data); setLtrModels(models.data);
+      setRerankerSelection(reranker.data.selection); setRerankerApproved(false);
       setLtrSelection(ltrSelected.data.selection);
       setLtrEnabled(Boolean(ltrSelected.data.enabled));
       setLtrActiveApproved(false);
@@ -188,6 +192,18 @@ export default function AdminPage() {
     } catch (err: any) { setError(err.response?.data?.detail || t("Không thể chọn chuỗi BGE.")); }
     finally { setSaving(false); }
   };
+  const changeReranker = async (enable: boolean) => {
+    if (!window.confirm(t(enable ? "Bật reranker sẽ gửi tiêu chí và đoạn CV đến Cloudflare. Tiếp tục?" : "Tắt reranker? Yêu cầu đang chạy có thể vẫn hoàn tất."))) return;
+    try {
+      setSaving(true); setError(null); setSuccess(null);
+      if (enable) await adminApi.enableReranker({ bge_config_id: rerankerDraft, destinations_approved: rerankerApproved });
+      else await adminApi.disableReranker();
+      await load({});
+      setSuccess(t("Đã cập nhật reranker trong database; trạng thái worker chưa được xác minh."));
+    } catch (err: any) { setError(err.response?.data?.detail || t("Không thể cập nhật reranker.")); }
+    finally { setSaving(false); }
+  };
+
   const disableBge = async () => {
     if (!window.confirm(t("Tắt BGE? Các yêu cầu đang thực hiện có thể vẫn hoàn tất."))) return;
     try {
@@ -375,6 +391,19 @@ export default function AdminPage() {
             </Box>
             <FormControlLabel control={<Checkbox checked={bgeApproved} onChange={event => setBgeApproved(event.target.checked)} />} label={t("Tôi xác nhận từng endpoint BGE đã được phê duyệt xử lý dữ liệu trong phạm vi sử dụng.")} />
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}><Button variant="contained" onClick={saveBgeRouteSet} disabled={saving || !bgeRouteIds.length || !bgeApproved}>{t("Bật / cập nhật BGE")}</Button><Button variant="outlined" onClick={disableBge} disabled={saving || !bgeRuntimeEnabled}>{t("Tắt BGE")}</Button></Box>
+            <Typography variant="h6" sx={{ mt: 4 }}>Cloudflare evidence reranker</Typography>
+            <Alert severity="warning" sx={{ my: 2 }}>{t("Reranker độc lập với BGE và LTR. Dữ liệu đã che thông tin có thể vẫn nhận diện được; chỉ bật sau khi phê duyệt gửi CV/JD đến Cloudflare. Chỉ sắp lại đoạn bằng chứng, không xếp ứng viên.")}</Alert>
+            <Typography variant="body2">{t("Trạng thái trong database")}: <strong>{rerankerSelection ? 'ON' : 'OFF'}</strong> · {t("Chưa xác minh trạng thái từng worker.")}</Typography>
+            {rerankerSelection && <Typography variant="body2">{t("Tài khoản Cloudflare đang chọn")}: {String(auxDrafts.find(item => item.config_id === rerankerSelection.bge_config_id)?.config.api_base || rerankerSelection.bge_config_id)}</Typography>}
+            <Typography variant="caption" display="block">@cf/baai/bge-reranker-base · {t("Chọn bản nháp BGE Cloudflare có API key và Base URL tài khoản /ai/v1. Chính sách ALLOW_EXTERNAL_API vẫn áp dụng.")}</Typography>
+            <FormControl fullWidth size="small" sx={{ mt: 2 }}>
+              <InputLabel id="reranker-draft-label">{t("Tài khoản Cloudflare")}</InputLabel>
+              <Select labelId="reranker-draft-label" label={t("Tài khoản Cloudflare")} value={rerankerDraft} onChange={e => { setRerankerDraft(e.target.value); setRerankerApproved(false); }}>
+                {auxDrafts.filter(item => item.service_type === 'BGE' && item.api_key_configured).map(item => <MenuItem key={item.config_id} value={item.config_id}>{String(item.config.provider_name)} · {String(item.config.api_base)} · {new Date(item.created_at).toLocaleString(dateLocale)}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <FormControlLabel control={<Checkbox checked={rerankerApproved} onChange={e => setRerankerApproved(e.target.checked)} />} label={t("Tôi xác nhận Cloudflare reranker đã được phê duyệt xử lý dữ liệu trong phạm vi sử dụng.")} />
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}><Button variant="contained" onClick={() => changeReranker(true)} disabled={saving || !rerankerDraft || !rerankerApproved}>{t("Bật / cập nhật reranker")}</Button><Button variant="outlined" onClick={() => changeReranker(false)} disabled={saving || !rerankerSelection}>{t("Tắt reranker")}</Button></Box>
           </CardContent></Card>
           </Box>
           <Box role="tabpanel" id="panel-ltr" aria-labelledby="tab-ltr" hidden={section !== 'ltr'}>

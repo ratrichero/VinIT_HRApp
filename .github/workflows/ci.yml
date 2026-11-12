@@ -50,6 +50,7 @@ jobs:
           python -m ruff check --select F
           backend/app/services/embedding.py
           backend/app/services/bge_routes.py
+          backend/app/services/reranker.py
           backend/app/services/ltr_managed.py
           backend/app/services/offline_matching_eval.py
           backend/app/services/semantic_diagnostics.py

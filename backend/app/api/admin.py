@@ -37,6 +37,7 @@ from app.services.llm_client import LLMError, llm_client
 from app.services.ltr import LTRError, LTRModel, artifact_sha256
 from app.services.ltr_managed import approved_model, current_selection
 from app.services.semantic_diagnostics import get_semantic_counters
+from app.services.reranker import MODEL as RERANKER_MODEL, RerankerError, cloudflare_rerank_endpoint, current_reranker
 
 router = APIRouter()
 
@@ -108,6 +109,12 @@ class BGERouteSetRequest(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("Duplicate BGE route")
         return value
+
+
+class RerankerEnableRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bge_config_id: UUID
+    destinations_approved: bool = False
 
 
 class LTRDraftRequest(BaseModel):
@@ -548,6 +555,75 @@ async def disable_bge(current_user: dict = Depends(require_admin_role)):
             INSERT INTO app_private.audit_events(actor_user_id, action_type, object_type, outcome)
             VALUES (:user, 'DISABLE_BGE', 'BGE_ROUTE_SET', 'OFF')
         """), {"user": current_user["user_id"]})
+        db.commit()
+        return {"enabled": False, "worker_status": "unknown"}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.get("/ai/reranker")
+async def get_reranker(current_user: dict = Depends(require_admin_role)):
+    db = SessionLocal()
+    try:
+        selection = current_reranker(db)
+        return {"enabled": selection is not None, "selection": selection, "worker_status": "unknown"}
+    finally:
+        db.close()
+
+
+@router.post("/ai/reranker/enable", status_code=201)
+async def enable_reranker(request: RerankerEnableRequest, current_user: dict = Depends(require_admin_role)):
+    if not request.destinations_approved:
+        raise HTTPException(status_code=400, detail="Cần phê duyệt gửi dữ liệu đến Cloudflare reranker")
+    db = SessionLocal()
+    try:
+        _lock_active_admin(db, current_user["user_id"])
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('hra-reranker-selection', 418630021))"))
+        try:
+            route = load_bge_route(db, str(request.bge_config_id), include_secret=True)
+            endpoint = cloudflare_rerank_endpoint(route['config'].get('api_base') or '')
+            if not route.get('api_key'):
+                raise RerankerError('Cloudflare API key is required')
+            from app.services.embedding import BGEHttpEmbeddingProvider
+            if not settings.ALLOW_EXTERNAL_API:
+                raise RerankerError('External API disabled')
+            BGEHttpEmbeddingProvider(api_base=endpoint)._check_endpoint_policy()
+        except (RerankerError, EmbeddingError, ValueError, KeyError, TypeError):
+            raise HTTPException(status_code=400, detail="Cấu hình Cloudflare hoặc chính sách mạng không hợp lệ") from None
+        db.execute(text("UPDATE app_private.reranker_selections SET current=false, retired_at=NOW() WHERE current"))
+        selection_id = db.execute(text("""
+            INSERT INTO app_private.reranker_selections(bge_config_id, model_name, created_by)
+            VALUES (:config_id, :model, :user) RETURNING selection_id
+        """), {"config_id": str(request.bge_config_id), "model": RERANKER_MODEL,
+                "user": current_user['user_id']}).scalar_one()
+        db.execute(text("""
+            INSERT INTO app_private.audit_events(actor_user_id, action_type, object_type, object_id, outcome, metadata)
+            VALUES (:user, 'ENABLE_RERANKER', 'RERANKER_SELECTION', :id, 'ON', CAST(:metadata AS jsonb))
+        """), {"user": current_user['user_id'], "id": selection_id,
+                "metadata": json.dumps({"model_name": RERANKER_MODEL, "bge_config_id": str(request.bge_config_id)})})
+        db.commit()
+        return {"enabled": True, "selection_id": str(selection_id), "worker_status": "unknown"}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post("/ai/reranker/disable")
+async def disable_reranker(current_user: dict = Depends(require_admin_role)):
+    db = SessionLocal()
+    try:
+        _lock_active_admin(db, current_user["user_id"])
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended('hra-reranker-selection', 418630021))"))
+        db.execute(text("UPDATE app_private.reranker_selections SET current=false, retired_at=NOW() WHERE current"))
+        db.execute(text("""
+            INSERT INTO app_private.audit_events(actor_user_id, action_type, object_type, outcome)
+            VALUES (:user, 'DISABLE_RERANKER', 'RERANKER_SELECTION', 'OFF')
+        """), {"user": current_user['user_id']})
         db.commit()
         return {"enabled": False, "worker_status": "unknown"}
     except Exception:

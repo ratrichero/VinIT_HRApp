@@ -35,6 +35,7 @@ from app.services.semantic_diagnostics import record_semantic_run
 from app.services.ltr import LTRModel, artifact_sha256, extract_ranking_features
 from app.services.ltr_managed import current_selection, resolve_managed
 from app.services.ai_runtime_controls import bge_pin_is_current, service_enabled
+from app.services.reranker import current_reranker, provider_for_pin, rerank
 from app.services.semantic_retrieval import merge_candidate_chunks, retrieve_semantic_candidates
 from app.services.redaction import redact_text
 from app.services.ai_config import (
@@ -218,6 +219,13 @@ class ProcessingWorker:
                 except Exception as exc:
                     logger.warning("Managed BGE unavailable; using lexical retrieval", error_type=type(exc).__name__)
                     runtime["bge_chain"] = {"routes": [], "status": "UNAVAILABLE"}
+            if not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT"}:
+                try:
+                    with db.begin_nested():
+                        runtime["reranker"] = current_reranker(db) or {"status": "OFF"}
+                except Exception as exc:
+                    logger.warning("Reranker control unavailable; retrieval unchanged", error_type=type(exc).__name__)
+                    runtime["reranker"] = {"status": "UNAVAILABLE"}
             if not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT", "RANKING"}:
                 try:
                     with db.begin_nested():
@@ -781,6 +789,30 @@ class ProcessingWorker:
             raise RuntimeError("Operation has no associated position; cannot process safely")
         return str(position_id)
 
+    def _rerank_fallback_chunks(self, db, loop, fallback: dict, criteria: list[dict], specs: dict) -> tuple[dict, dict]:
+        """Rerank existing evidence only; each failure preserves that criterion's order."""
+        pinned = (runtime_context.get() or {}).get("reranker")
+        result = dict(fallback)
+        stats = {"attempted": 0, "succeeded": 0, "failed": 0}
+        if not isinstance(pinned, dict) or not pinned.get("selection_id"):
+            return result, stats
+        for criterion in criteria:
+            criterion_id = str(criterion.get("criterion_id"))
+            chunks = result.get(criterion_id, [])
+            if not isinstance(chunks, list) or not 2 <= len(chunks) <= 5:
+                continue
+            stats["attempted"] += 1
+            try:
+                with db.begin_nested():
+                    endpoint, key = provider_for_pin(db, pinned)
+                query = requirement_query_text(specs.get(criterion_id) or criterion)
+                result[criterion_id] = loop.run_until_complete(rerank(endpoint, key, query, chunks))
+                stats["succeeded"] += 1
+            except Exception as exc:
+                stats["failed"] += 1
+                logger.warning("Reranker unavailable; retrieval order unchanged", error_type=type(exc).__name__)
+        return result, stats
+
     def _semantic_fallback_chunks(self, db, loop, *, application_id: str, document_id: str,
                                   deterministic_result: dict, unresolved_criteria: list[dict]) -> dict:
         """Add BGE/pgvector candidates to the lexical fallback chunks.
@@ -1213,6 +1245,9 @@ class ProcessingWorker:
                     reuse_scope = semantic_reuse_scope(str(operation_id), fingerprint_payload["semantic_retrieval"])
                     if reuse_scope:
                         fingerprint_payload["semantic_reuse_scope"] = reuse_scope
+                    if (runtime_context.get() or {}).get("reranker", {}).get("selection_id"):
+                        # A provider failure can change results; never reuse across operations.
+                        fingerprint_payload["reranker_reuse_scope"] = {"policy": "operation-scoped-v1", "operation_id": str(operation_id)}
                     assessment_fingerprint = hashlib.sha256(json.dumps(
                         fingerprint_payload, sort_keys=True, ensure_ascii=False, default=str
                     ).encode("utf-8")).hexdigest()
@@ -1311,6 +1346,11 @@ class ProcessingWorker:
                                     if isinstance(chunks, list)
                                 ),
                             })
+                    if unresolved_criteria:
+                        fallback_chunks, reranker_stats = self._rerank_fallback_chunks(
+                            db, loop, fallback_chunks, unresolved_criteria,
+                            deterministic_result.get("requirement_specs") or {})
+                        provider_snapshot["reranker_execution"] = reranker_stats
                     if unresolved_criteria:
                         findings = loop.run_until_complete(llm_client.match_criterion_evidence(
                             cv_text=cv_text, candidate_profile=candidate_profile,

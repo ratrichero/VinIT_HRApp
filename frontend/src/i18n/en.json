@@ -1050,5 +1050,16 @@
   "Kích hoạt cấu hình LLM mới cho các tác vụ tiếp theo?": "Activate this LLM configuration for subsequent jobs?",
   "Danh sách đang chỉnh sửa chỉ áp dụng khi bấm Bật / cập nhật BGE.": "The edited list takes effect only after enabling / updating BGE.",
   "BGE đang bật trong database nhưng chuỗi không khả dụng; worker mới sẽ dùng lexical.": "BGE is enabled in the database but the route set is unavailable; updated workers will use lexical retrieval.",
-  "LTR đang bật trong database nhưng selection không hợp lệ; worker mới sẽ dùng OFF.": "LTR is enabled in the database but the selection is invalid; updated workers will use OFF."
+  "LTR đang bật trong database nhưng selection không hợp lệ; worker mới sẽ dùng OFF.": "LTR is enabled in the database but the selection is invalid; updated workers will use OFF.",
+  "Bật reranker sẽ gửi tiêu chí và đoạn CV đến Cloudflare. Tiếp tục?": "Enabling the reranker sends criteria and CV excerpts to Cloudflare. Continue?",
+  "Tắt reranker? Yêu cầu đang chạy có thể vẫn hoàn tất.": "Disable the reranker? In-flight requests may still complete.",
+  "Đã cập nhật reranker trong database; trạng thái worker chưa được xác minh.": "Reranker updated in the database; worker status has not been verified.",
+  "Không thể cập nhật reranker.": "Could not update the reranker.",
+  "Reranker độc lập với BGE và LTR. Dữ liệu đã che thông tin có thể vẫn nhận diện được; chỉ bật sau khi phê duyệt gửi CV/JD đến Cloudflare. Chỉ sắp lại đoạn bằng chứng, không xếp ứng viên.": "The reranker is independent of BGE and LTR. Redacted data may still be identifiable; enable only after approving CV/JD data transfer to Cloudflare. It reorders evidence excerpts, not candidates.",
+  "Chọn bản nháp BGE Cloudflare có API key và Base URL tài khoản /ai/v1. Chính sách ALLOW_EXTERNAL_API vẫn áp dụng.": "Select a Cloudflare BGE draft with an API key and account /ai/v1 Base URL. ALLOW_EXTERNAL_API still applies.",
+  "Tài khoản Cloudflare": "Cloudflare account",
+  "Tôi xác nhận Cloudflare reranker đã được phê duyệt xử lý dữ liệu trong phạm vi sử dụng.": "I confirm that Cloudflare reranker is approved to process data for this use.",
+  "Bật / cập nhật reranker": "Enable / update reranker",
+  "Tắt reranker": "Disable reranker",
+  "Tài khoản Cloudflare đang chọn": "Selected Cloudflare account"
 }
