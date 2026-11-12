@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from urllib.parse import urlsplit
 import httpx
-from typing import Dict, Any, List, Literal, Optional
+from typing import Callable, Dict, Any, List, Literal, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -313,12 +313,62 @@ class LLMClient:
         return {**result, "ok": True, "provider_returned_model": data.get("model"),
                 "message": "Kết nối thành công tới nhà cung cấp."}
 
+    async def _call_llm(
+        self, system_prompt: str, user_prompt: str,
+        temperature: Optional[float] = None, json_schema: Optional[Dict] = None,
+        metadata_out: dict[str, Any] | None = None, *, task_name: str = "hra.llm.call",
+        prompt_version: str | None = None,
+        observability_metadata: dict[str, Any] | None = None,
+        output_validator: Callable[[Any], Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Try the pinned primary and explicitly configured same-kind fallbacks in order."""
+        runtime = runtime_context.get()
+        if runtime is None:
+            db = SessionLocal()
+            try:
+                runtime = get_active_runtime(db)
+            except Exception as exc:
+                logger.error("AI runtime configuration unavailable", error_type=type(exc).__name__)
+                raise LLMError("AI configuration is unavailable") from None
+            finally:
+                db.close()
+        routes = [runtime, *(runtime.get("fallbacks") or [])]
+        if len(routes) > 4 or any(not isinstance(route, dict) for route in routes):
+            raise LLMError("Invalid LLM fallback configuration")
+        for index, route in enumerate(routes):
+            token = runtime_context.set(route)
+            try:
+                result = await self._call_llm_one(
+                    system_prompt, user_prompt, temperature, json_schema, metadata_out,
+                    task_name=task_name, prompt_version=prompt_version,
+                    observability_metadata=observability_metadata,
+                )
+                if output_validator is not None:
+                    try:
+                        output_validator(result)
+                    except ValidationError:
+                        raise LLMError("LLM output failed validation") from None
+                if metadata_out is not None:
+                    metadata_out.update({"actual_provider": route.get("provider"),
+                                         "actual_model": route.get("model_name"),
+                                         "actual_config_id": route.get("config_id"),
+                                         "fallback_index": index})
+                return result
+            except (LLMError, httpx.HTTPError) as exc:
+                logger.warning("LLM route failed", fallback_index=index, error_type=type(exc).__name__)
+                if index == len(routes) - 1:
+                    raise LLMError("All configured LLM routes failed") from None
+            finally:
+                runtime_context.reset(token)
+        raise LLMError("All configured LLM routes failed")
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, LLMError))
+        retry=retry_if_exception_type((httpx.HTTPError, LLMError)),
+        reraise=True,
     )
-    async def _call_llm(
+    async def _call_llm_one(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -496,6 +546,7 @@ RULES:
             temperature=0.0,
             metadata_out=metadata,
             task_name="hra.llm.criteria_extraction",
+            output_validator=JD_Criteria_Schema.model_validate,
             prompt_version=CRITERIA_PROMPT_VERSION,
             observability_metadata={
                 "position_id": position_id,
@@ -539,6 +590,7 @@ STRICT PRIVACY & ANTI-BIAS RULES:
             temperature=0.0,  # Deterministic parsing
             metadata_out=metadata,
             task_name="hra.llm.profile_extraction",
+            output_validator=CandidateProfileSchema.model_validate,
             prompt_version=PROFILE_PROMPT_VERSION,
             observability_metadata={
                 "application_id": candidate_identifier,

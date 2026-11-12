@@ -1,0 +1,45 @@
+{
+  "notice": "SYNTHETIC ONLY — fabricated examples; not HR gold, not production acceptance",
+  "positions": [
+    {
+      "id": "syn-backend",
+      "jd": "Backend Python: ít nhất 4 năm kinh nghiệm Python; PostgreSQL; Docker là ưu tiên.",
+      "criteria": [
+        "Python tối thiểu 4 năm",
+        "PostgreSQL",
+        "Docker"
+      ]
+    },
+    {
+      "id": "syn-data",
+      "jd": "Data engineer: experience building ETL pipelines and SQL data models; cloud orchestration is preferred.",
+      "criteria": [
+        "ETL pipeline",
+        "SQL modelling",
+        "cloud orchestration"
+      ]
+    }
+  ],
+  "cvs": [
+    {
+      "id": "syn-cv-01",
+      "language": "vi",
+      "text": "Dự án: 5 năm phát triển Python, thiết kế PostgreSQL, triển khai Docker."
+    },
+    {
+      "id": "syn-cv-02",
+      "language": "en",
+      "text": "Two years writing Python services; studied PostgreSQL. No duration for Docker."
+    },
+    {
+      "id": "syn-cv-03",
+      "language": "en",
+      "text": "Built data ingestion workflows and modeled SQL warehouse tables over three years."
+    },
+    {
+      "id": "syn-cv-04",
+      "language": "vi",
+      "text": "Phân tích dữ liệu bằng bảng tính. Chưa có thông tin về pipeline hay kinh nghiệm SQL."
+    }
+  ]
+}

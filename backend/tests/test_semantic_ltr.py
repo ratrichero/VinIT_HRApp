@@ -606,3 +606,17 @@ def test_ltr_shadow_does_not_change_ranking_and_active_stays_inside_gate():
 def test_frontend_types_expose_ltr_score_contract():
     types_file = Path(__file__).resolve().parents[2] / "frontend/src/types/index.ts"
     assert "ltr_score?: number | null" in types_file.read_text(encoding="utf-8")
+
+
+def test_ltr_rejects_nonfinite_or_nonpositive_scalers_and_invalid_metrics():
+    import copy
+    artifact = train_ltr_model(_ltr_examples(group_count=20), min_examples=30, min_groups=5, epochs=80)
+    for field, value in (('means', float('nan')), ('weights', float('inf')), ('stds', 0.0), ('stds', -1.0)):
+        invalid = copy.deepcopy(artifact)
+        invalid[field][0] = value
+        with pytest.raises(LTRError):
+            LTRModel(invalid)
+    for value in (float('nan'), float('inf'), 1.1, True):
+        invalid = copy.deepcopy(artifact)
+        invalid['metrics']['test']['ndcg_at_10'] = value
+        assert not LTRModel(invalid).passes_gates(min_ndcg=.7, min_pairwise=.65)

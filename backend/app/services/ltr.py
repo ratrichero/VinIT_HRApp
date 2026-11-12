@@ -330,6 +330,9 @@ class LTRModel:
         if not self.model_version or len(self.means) != len(FEATURE_NAMES) \
                 or len(self.stds) != len(FEATURE_NAMES) or len(self.weights) != len(FEATURE_NAMES):
             raise LTRError("Artifact LTR thiếu weights/scaler")
+        if (not all(math.isfinite(v) for v in self.means + self.stds + self.weights)
+                or any(value <= 0 for value in self.stds)):
+            raise LTRError("Artifact LTR chứa weights/scaler không hợp lệ")
 
     @classmethod
     def from_artifact(cls, artifact: Mapping[str, Any]) -> "LTRModel":
@@ -366,8 +369,8 @@ class LTRModel:
         except (TypeError, ValueError):
             test_groups = 0
         return (
-            isinstance(ndcg, (int, float)) and float(ndcg) >= min_ndcg
-            and isinstance(pairwise, (int, float)) and float(pairwise) >= min_pairwise
+            type(ndcg) in (int, float) and math.isfinite(float(ndcg)) and min_ndcg <= float(ndcg) <= 1
+            and type(pairwise) in (int, float) and math.isfinite(float(pairwise)) and min_pairwise <= float(pairwise) <= 1
             and test_examples >= min_test_examples
             and test_groups >= min_test_groups
         )

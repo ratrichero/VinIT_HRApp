@@ -29,15 +29,17 @@ from app.services.matching import matching_engine
 from app.services.deterministic_matching import deterministic_matcher
 from app.services.embedding import (
     chunk_text_sha256, get_embedding_provider, parse_vector_literal,
-    requirement_query_text, semantic_config_fingerprint, vector_literal,
+    requirement_query_text, semantic_config_fingerprint, semantic_reuse_scope, vector_literal,
 )
 from app.services.semantic_diagnostics import record_semantic_run
 from app.services.ltr import LTRModel, artifact_sha256, extract_ranking_features
+from app.services.ltr_managed import current_selection, resolve_shadow
 from app.services.semantic_retrieval import merge_candidate_chunks, retrieve_semantic_candidates
 from app.services.redaction import redact_text
 from app.services.ai_config import (
-    get_active_runtime, hydrate_runtime_secret, runtime_context, runtime_snapshot,
+    get_active_runtime, runtime_context, runtime_snapshot,
 )
+from app.services.bge_routes import load_active_bge_chain, provider_for_pinned_route, route_index_version
 from datetime import date
 
 logger = get_logger(__name__)
@@ -207,11 +209,24 @@ class ProcessingWorker:
             token = str(uuid4())
             backend_pid = db.execute(text("SELECT pg_backend_pid()")).scalar_one()
             runtime = chosen["ai_config_snapshot"] or get_active_runtime(db)
-            if chosen["ai_config_snapshot"]:
-                # Snapshots are public (no provider secret). Rehydrate the
-                # pinned version's key in memory only; it is never written
-                # back into ai_config_snapshot below.
-                runtime = hydrate_runtime_secret(db, runtime)
+            if (not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT"}
+                    and settings.SEMANTIC_RETRIEVAL_ENABLED and settings.ALLOW_MANAGED_BGE_ROUTING):
+                try:
+                    with db.begin_nested():
+                        runtime["bge_chain"] = load_active_bge_chain(db)
+                except Exception as exc:
+                    logger.warning("Managed BGE route set unavailable; using lexical retrieval", error_type=type(exc).__name__)
+                    runtime["bge_chain"] = {"routes": [], "status": "UNAVAILABLE"}
+            if (not chosen["ai_config_snapshot"] and capability in {"CV_PROCESSING", "ASSESSMENT", "RANKING"}
+                    and settings.ALLOW_MANAGED_LTR_ROUTING):
+                try:
+                    with db.begin_nested():
+                        runtime["ltr_selection"] = current_selection(db) or {"mode": "OFF"}
+                except Exception as exc:
+                    logger.warning("Managed LTR selection unavailable; ranking unchanged", error_type=type(exc).__name__)
+                    runtime["ltr_selection"] = {"mode": "OFF"}
+            # Snapshots contain no secrets. Each route rehydrates its own key
+            # only when attempted, so a broken primary key can fail over.
             snapshot = runtime_snapshot(runtime)
             db.execute(text("""
                 UPDATE app_private.operations
@@ -781,7 +796,46 @@ class ProcessingWorker:
         chunks = [chunk for chunk in deterministic_result.get("chunks", []) if isinstance(chunk, dict)]
         if not chunks:
             return fallback
-        provider = get_embedding_provider()
+        chain = (runtime_context.get() or {}).get("bge_chain")
+        # A resumed managed operation must never silently switch to the legacy
+        # endpoint if its gate is disabled or its pinned chain is unavailable.
+        if chain is not None and not settings.ALLOW_MANAGED_BGE_ROUTING:
+            deterministic_result["_semantic_route_used"] = {"status": "LEXICAL_FALLBACK"}
+            return fallback
+        if settings.ALLOW_MANAGED_BGE_ROUTING:
+            routes = chain.get("routes", []) if isinstance(chain, dict) else []
+        else:
+            routes = [None]
+        for index, route in enumerate(routes):
+            try:
+                provider = provider_for_pinned_route(db, route) if route else get_embedding_provider()
+                config = route.get("config", {}) if route else {}
+                result = self._semantic_fallback_one(
+                    db, loop, application_id=application_id, document_id=document_id,
+                    deterministic_result=deterministic_result, unresolved_criteria=unresolved_criteria,
+                    provider=provider, index_version=route_index_version(route) if route else settings.EMBEDDING_INDEX_VERSION,
+                    top_k=int(config.get("top_k", settings.SEMANTIC_TOP_K)),
+                    min_similarity=float(config.get("min_similarity", settings.SEMANTIC_MIN_SIMILARITY)),
+                )
+                if result is not None:
+                    deterministic_result["_semantic_route_used"] = {
+                        "route_set_id": chain.get("route_set_id") if chain else None,
+                        "route_config_id": route.get("config_id") if route else None,
+                        "model": provider.model, "fallback_index": index,
+                    }
+                    return result
+            except Exception as exc:
+                logger.warning("BGE route failed", fallback_index=index, error_type=type(exc).__name__)
+        deterministic_result["_semantic_route_used"] = {"status": "LEXICAL_FALLBACK"}
+        return fallback
+
+    def _semantic_fallback_one(self, db, loop, *, application_id: str, document_id: str,
+                               deterministic_result: dict, unresolved_criteria: list[dict],
+                               provider, index_version: str, top_k: int, min_similarity: float) -> dict | None:
+        """One route owns all query/document vectors and an isolated cache namespace."""
+        fallback = {criterion_id: list(chunks) for criterion_id, chunks in
+                    (deterministic_result.get("fallback_chunks") or {}).items()}
+        chunks = [chunk for chunk in deterministic_result.get("chunks", []) if isinstance(chunk, dict)]
         embedding_model = str(getattr(provider, "model", settings.EMBEDDING_MODEL))
         embedding_dimension = int(getattr(provider, "dimension", settings.EMBEDDING_DIMENSION))
         specs = deterministic_result.get("requirement_specs") or {}
@@ -808,7 +862,7 @@ class ProcessingWorker:
                       AND chunk_text_sha256 = ANY(CAST(:chunk_hashes AS text[]))
                 """), {
                     "document_id": document_id, "model": embedding_model,
-                    "index_version": settings.EMBEDDING_INDEX_VERSION,
+                    "index_version": index_version,
                     "chunk_hashes": chunk_hashes,
                 }).mappings().all()
             for row in cached_rows:
@@ -844,7 +898,7 @@ class ProcessingWorker:
                 outcome="PROVIDER_FALLBACK", error_type=type(exc).__name__)
             logger.warning("Semantic embedding unavailable; using lexical fallback",
                            error_type=type(exc).__name__)
-            return fallback
+            return None
         resolved_chunk_vectors: list[list[float]] = [
             vector for vector in chunk_vectors if vector is not None
         ]
@@ -855,7 +909,7 @@ class ProcessingWorker:
                 outcome="PROVIDER_FALLBACK", error_type="EmbeddingError")
             logger.warning("Semantic embedding unavailable; using lexical fallback",
                            error_type="EmbeddingError")
-            return fallback
+            return None
         chunk_vectors = resolved_chunk_vectors
 
         # Persist only newly embedded vectors.  A missing extension/table
@@ -883,7 +937,7 @@ class ProcessingWorker:
                         "char_start": chunk.get("char_start"), "char_end": chunk.get("char_end"),
                         "embedding": vector_literal(vector), "model": embedding_model,
                         "dimension": embedding_dimension,
-                        "index_version": settings.EMBEDDING_INDEX_VERSION,
+                        "index_version": index_version,
                     })
         except Exception as exc:
             pg_available = False
@@ -897,22 +951,28 @@ class ProcessingWorker:
                 try:
                     with db.begin_nested():
                         rows = db.execute(text("""
-                            SELECT chunk_id, 1 - (embedding <=> CAST(:query_vector AS vector)) AS similarity
+                            SELECT chunk_id, chunk_text_sha256, 1 - (embedding <=> CAST(:query_vector AS vector)) AS similarity
                             FROM app_private.cv_chunk_embeddings
                             WHERE document_id = :document_id AND embedding_model = :model
                               AND index_version = :index_version
+                              AND (chunk_id, chunk_text_sha256) IN (
+                                  SELECT * FROM unnest(CAST(:chunk_ids AS text[]), CAST(:chunk_hashes AS text[]))
+                              )
                             ORDER BY embedding <=> CAST(:query_vector AS vector)
                             LIMIT :top_k
                         """), {
                             "document_id": document_id, "model": embedding_model,
-                            "index_version": settings.EMBEDDING_INDEX_VERSION,
+                            "index_version": index_version,
+                            "chunk_ids": [str(chunk.get("chunk_id")) for chunk in chunks],
+                            "chunk_hashes": chunk_hashes,
                             "query_vector": vector_literal(query_vector),
-                            "top_k": int(settings.SEMANTIC_TOP_K),
+                            "top_k": top_k,
                         }).mappings().all()
                     for row in rows:
                         similarity = float(row["similarity"])
                         chunk = chunk_by_id.get(str(row["chunk_id"]))
-                        if chunk and similarity >= float(settings.SEMANTIC_MIN_SIMILARITY):
+                        if (chunk and row.get("chunk_text_sha256") == chunk_text_sha256(str(chunk.get("text") or ""))
+                                and similarity >= min_similarity):
                             semantic_chunks.append({
                                 **chunk, "semantic_similarity": round(similarity, 6),
                                 "retrieval_source": "SEMANTIC",
@@ -924,8 +984,8 @@ class ProcessingWorker:
             if not semantic_chunks:
                 semantic_chunks = retrieve_semantic_candidates(
                     query_vector, chunks, chunk_vectors,
-                    min_similarity=float(settings.SEMANTIC_MIN_SIMILARITY),
-                    top_k=int(settings.SEMANTIC_TOP_K),
+                    min_similarity=min_similarity,
+                    top_k=top_k,
                 )
             fallback[criterion_id] = merge_candidate_chunks(
                 fallback.get(criterion_id, []), semantic_chunks,
@@ -1117,7 +1177,9 @@ class ProcessingWorker:
                             key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False, default=str),
                         ),
                         "cv_text_sha256": hashlib.sha256(cv_text.encode("utf-8")).hexdigest(),
-                        "ai_runtime": runtime_public,
+                        # LTR affects ranking, not this assessment. Keep its pinned
+                        # selection in operation provenance, not the assessment key.
+                        "ai_runtime": {key: value for key, value in runtime_public.items() if key != "ltr_selection"},
                         "llm_seed": settings.LLM_SEED,
                         "prompt_version": settings.MATCHING_PROMPT_VERSION,
                         "matching_policy_version": matching_engine.POLICY_VERSION,
@@ -1143,6 +1205,9 @@ class ProcessingWorker:
                         },
                         "semantic_retrieval": semantic_config_fingerprint(),
                     }
+                    reuse_scope = semantic_reuse_scope(str(operation_id), fingerprint_payload["semantic_retrieval"])
+                    if reuse_scope:
+                        fingerprint_payload["semantic_reuse_scope"] = reuse_scope
                     assessment_fingerprint = hashlib.sha256(json.dumps(
                         fingerprint_payload, sort_keys=True, ensure_ascii=False, default=str
                     ).encode("utf-8")).hexdigest()
@@ -1257,6 +1322,8 @@ class ProcessingWorker:
                                 "_prompt_version", settings.MATCHING_PROMPT_VERSION)
                             raw_findings.extend(findings.get("findings", []))
                     provider_snapshot.update(provider_metadata)
+                    if deterministic_result.get("_semantic_route_used"):
+                        provider_snapshot["semantic_route"] = deterministic_result["_semantic_route_used"]
                     chunk_by_id = {
                         str(chunk.get("chunk_id")): chunk
                         for chunk in deterministic_result.get("chunks", [])
@@ -1505,8 +1572,19 @@ class ProcessingWorker:
                          "latest_assessment": {"assessment_id": row["assessment_id"],
                              "matching_status": row["matching_status"], "matching_score": row["matching_score"],
                              "evidence_coverage": row["evidence_coverage"]}} for row in rows]
-        ltr_model = self._load_ltr_model(db)
-        ltr_mode = (settings.LTR_MODE or "OFF").upper() if ltr_model else "OFF"
+        pinned_ltr = (runtime_context.get() or {}).get("ltr_selection")
+        managed_ltr = settings.ALLOW_MANAGED_LTR_ROUTING or pinned_ltr is not None
+        if managed_ltr:
+            try:
+                with db.begin_nested():
+                    ltr_model = resolve_shadow(db, pinned_ltr)
+            except Exception as exc:
+                logger.warning("Managed LTR unavailable; ranking unchanged", error_type=type(exc).__name__)
+                ltr_model = None
+            ltr_mode = "SHADOW" if ltr_model else "OFF"
+        else:
+            ltr_model = self._load_ltr_model(db)
+            ltr_mode = (settings.LTR_MODE or "OFF").upper() if ltr_model else "OFF"
         ltr_scores: dict[str, float] = {}
         if ltr_model:
             assessment_ids = [str(item["latest_assessment"]["assessment_id"]) for item in applications]
@@ -1531,15 +1609,16 @@ class ProcessingWorker:
         ranking_run_id = db.execute(text("""
             INSERT INTO app_private.ranking_runs
                 (position_id, criteria_version_id, policy_version, operation_id, ai_config_id, status, completed_at,
-                 ltr_model_version, ltr_mode)
+                 ltr_model_version, ltr_mode, ltr_selection_id)
             VALUES (:position_id, :criteria_version_id, :ranking_policy_version, :operation_id, :ai_config_id, 'COMPLETED', NOW(),
-                    :ltr_model_version, :ltr_mode)
+                    :ltr_model_version, :ltr_mode, :ltr_selection_id)
             RETURNING ranking_run_id
         """), {"position_id": position_id, "criteria_version_id": str(criteria_version_id),
                 "ranking_policy_version": settings.RANKING_POLICY_VERSION,
                 "operation_id": str(operation_id), "ai_config_id": (runtime_context.get() or {}).get("config_id"),
                 "ltr_model_version": ltr_model.model_version if ltr_model else None,
-                "ltr_mode": ltr_mode}).scalar_one()
+                "ltr_mode": ltr_mode,
+                "ltr_selection_id": pinned_ltr.get("selection_id") if managed_ltr and ltr_model else None}).scalar_one()
         for item in ranked:
             assessment = item["latest_assessment"]
             db.execute(text("""

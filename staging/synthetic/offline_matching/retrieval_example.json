@@ -1,0 +1,50 @@
+{
+  "notice": "SYNTHETIC hand-authored candidate scores, not BGE inference",
+  "cases": [
+    {
+      "case_id": "syn-backend-python",
+      "all_chunk_ids": [
+        "c1",
+        "c2",
+        "c3"
+      ],
+      "gold_chunk_ids": [
+        "c1",
+        "c2"
+      ],
+      "lexical_chunk_ids": [
+        "c1",
+        "c3"
+      ],
+      "semantic_candidates": [
+        {
+          "chunk_id": "c1",
+          "semantic_similarity": 1.0
+        },
+        {
+          "chunk_id": "c2",
+          "semantic_similarity": 0.9
+        }
+      ]
+    },
+    {
+      "case_id": "syn-data-sql",
+      "all_chunk_ids": [
+        "d1",
+        "d2"
+      ],
+      "gold_chunk_ids": [
+        "d2"
+      ],
+      "lexical_chunk_ids": [
+        "d1"
+      ],
+      "semantic_candidates": [
+        {
+          "chunk_id": "d2",
+          "semantic_similarity": 1.0
+        }
+      ]
+    }
+  ]
+}

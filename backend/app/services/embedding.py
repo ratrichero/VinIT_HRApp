@@ -205,8 +205,12 @@ class BGEHttpEmbeddingProvider:
             rows = data.get("data") if isinstance(data, dict) else None
             if not isinstance(rows, list) or len(rows) != len(texts):
                 raise EmbeddingError("BGE endpoint returned an unexpected embeddings payload")
+            indices = [row.get("index") if isinstance(row, dict) else None for row in rows]
+            if (any(type(index) is not int for index in indices)
+                    or sorted(indices) != list(range(len(texts)))):
+                raise EmbeddingError("BGE endpoint returned invalid embedding indices")
             vectors: list[list[float]] = []
-            for row in sorted(rows, key=lambda item: item.get("index", 0) if isinstance(item, dict) else 0):
+            for row in sorted(rows, key=lambda item: item["index"]):
                 vector = row.get("embedding") if isinstance(row, dict) else None
                 if not isinstance(vector, list) or len(vector) != self.dimension:
                     raise EmbeddingError(
@@ -237,6 +241,13 @@ def semantic_config_fingerprint() -> dict[str, Any] | None:
     """
     if not settings.SEMANTIC_RETRIEVAL_ENABLED:
         return None
+    from app.services.ai_config import runtime_context
+    runtime = runtime_context.get() or {}
+    if settings.ALLOW_MANAGED_BGE_ROUTING or runtime.get("bge_chain") is not None:
+        from app.services.ai_config import runtime_snapshot
+        return {"enabled": True, "managed_allowed": bool(settings.ALLOW_MANAGED_BGE_ROUTING),
+                "managed_routes": runtime_snapshot(runtime).get("bge_chain"),
+                "query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION or ""}
     provider = get_embedding_provider()
     return {
         "enabled": True,
@@ -248,6 +259,19 @@ def semantic_config_fingerprint() -> dict[str, Any] | None:
         "min_similarity": float(settings.SEMANTIC_MIN_SIMILARITY),
         "query_instruction": settings.EMBEDDING_QUERY_INSTRUCTION or "",
     }
+
+
+def semantic_reuse_scope(operation_id: str, semantic_config: dict[str, Any] | None) -> dict[str, str] | None:
+    """Avoid cross-operation reuse when actual provider/availability is unknown.
+
+    Within the same operation, already completed assessments remain immutable on
+    recovery; incomplete ones are retried. Vector cache reuse is unaffected.
+    """
+    if semantic_config is None:
+        return None
+    if not operation_id:
+        raise ValueError("Semantic assessment reuse requires an operation id")
+    return {"policy": "operation-scoped-v1", "operation_id": str(operation_id)}
 
 
 def requirement_query_text(spec: Any) -> str:

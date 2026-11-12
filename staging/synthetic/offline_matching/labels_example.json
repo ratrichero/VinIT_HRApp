@@ -1,0 +1,58 @@
+{
+  "dataset_version": "syn-v1",
+  "label_source": "SYNTHETIC",
+  "examples": [
+    {
+      "position_id": "syn-backend",
+      "criteria_version_id": "syn-rubric-v1",
+      "application_id": "a",
+      "assessment_id": "base-a",
+      "group_id": "syn-backend",
+      "reviewer_id": "synthetic-reviewer",
+      "reviewed_at": "2026-01-01T00:00:00Z",
+      "label": 2,
+      "adjudication_status": "AGREED",
+      "features": {
+        "matching_score": 0.0,
+        "evidence_coverage": 0.0,
+        "strong_match_rate": 0.0,
+        "match_rate": 0.0,
+        "no_match_rate": 0.0,
+        "unclear_rate": 0.0,
+        "rule_decision_rate": 0.0,
+        "llm_decision_rate": 0.0,
+        "avg_evidence_strength": 0.0,
+        "mandatory_no_match": 0.0,
+        "needs_verification": 0.0,
+        "meets_mandatory": 0.0,
+        "possible_mismatch": 0.0
+      }
+    },
+    {
+      "position_id": "syn-backend",
+      "criteria_version_id": "syn-rubric-v1",
+      "application_id": "b",
+      "assessment_id": "base-b",
+      "group_id": "syn-backend",
+      "reviewer_id": "synthetic-reviewer",
+      "reviewed_at": "2026-01-01T00:00:00Z",
+      "label": 1,
+      "adjudication_status": "AGREED",
+      "features": {
+        "matching_score": 0.0,
+        "evidence_coverage": 0.0,
+        "strong_match_rate": 0.0,
+        "match_rate": 0.0,
+        "no_match_rate": 0.0,
+        "unclear_rate": 0.0,
+        "rule_decision_rate": 0.0,
+        "llm_decision_rate": 0.0,
+        "avg_evidence_strength": 0.0,
+        "mandatory_no_match": 0.0,
+        "needs_verification": 0.0,
+        "meets_mandatory": 0.0,
+        "possible_mismatch": 0.0
+      }
+    }
+  ]
+}

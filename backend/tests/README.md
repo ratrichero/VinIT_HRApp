@@ -31,7 +31,11 @@ for f in supabase/migrations/00001_initial_schema.sql \
          supabase/migrations/00011_ltr_model_governance.sql \
          supabase/migrations/00012_retention_audit_integrity.sql \
          supabase/migrations/00013_direct_criteria_approval.sql \
-         supabase/migrations/00014_retention_shared_feedback_guard.sql; do
+         supabase/migrations/00014_retention_shared_feedback_guard.sql \
+         supabase/migrations/00015_llm_fallback_routes.sql \
+         supabase/migrations/00016_ai_auxiliary_drafts.sql \
+         supabase/migrations/00017_bge_route_sets.sql \
+         supabase/migrations/00018_ltr_managed_shadow.sql; do
   psql 'postgresql://postgres@127.0.0.1:55432/hra_phase1_test' -v ON_ERROR_STOP=1 -f "$f"
 done
 ```

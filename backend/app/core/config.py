@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     # changes the candidate chunks sent to the LLM fallback, so the full
     # semantic configuration is pinned into the assessment fingerprint.
     SEMANTIC_RETRIEVAL_ENABLED: bool = False
+    # Explicit deployment gate: admin-managed routes never override semantic OFF.
+    ALLOW_MANAGED_BGE_ROUTING: bool = False
     EMBEDDING_PROVIDER: str = "disabled"  # disabled | bge_http | hash
     EMBEDDING_API_BASE: str | None = None
     EMBEDDING_API_KEY: str | None = None
@@ -101,6 +103,9 @@ class Settings(BaseSettings):
     # Learning-to-Rank. OFF by default; SHADOW scores without changing the
     # published order, ACTIVE may reorder only inside the existing
     # mandatory-status/coverage gates when a gated model artifact is loaded.
+    # Managed routing is opt-in and currently permits SHADOW only; it never
+    # enables the legacy ACTIVE path or overrides LTR_MODE=OFF.
+    ALLOW_MANAGED_LTR_ROUTING: bool = False
     LTR_MODE: str = "OFF"  # OFF | SHADOW | ACTIVE
     LTR_MODEL_PATH: str | None = None
     LTR_MODEL_VERSION: str | None = None

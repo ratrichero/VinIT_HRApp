@@ -11,7 +11,9 @@ assessment_fingerprint (or fingerprint), and criterion_results/criteria/
 findings with criterion_id + outcome.  Runs sharing a fingerprint are
 treated as forced reruns: the first occurrence of each application is the
 baseline.  Rankings, when not supplied explicitly, are derived from score
-(descending), evidence coverage (descending), then application_id.
+(descending), evidence coverage (descending), then application_id. This legacy
+report is diagnostic only: --check always fails closed. For acceptance-oriented
+comparison of explicit snapshots use offline_matching_eval.py repeatability.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ def main() -> int:
     parser.add_argument("input", help="Path to an assessment snapshot JSON file")
     parser.add_argument("--output", help="Write the JSON report here instead of stdout")
     parser.add_argument("--check", action="store_true",
-                        help="Exit with code 2 when acceptance thresholds fail")
+                        help="Legacy diagnostic cannot establish acceptance; always exits 2")
     parser.add_argument("--max-p95-score-drift", type=float, default=2.0)
     parser.add_argument("--max-criterion-flip-rate", type=float, default=0.02)
     args = parser.parse_args()
@@ -100,6 +102,16 @@ def main() -> int:
     if ranking is not None:
         report["ranking"] = ranking
 
+    # Legacy exports do not establish explicit paired ranking snapshots,
+    # cohort provenance, or forced-rerun identity. Never certify them.
+    report["diagnostic_passed"] = report["passed"]
+    report["passed"] = False
+    report["diagnostic_only"] = True
+    report["acceptance_status"] = "INSUFFICIENT_DATA"
+    report["acceptance_note"] = (
+        "Legacy input cannot establish acceptance. Use offline_matching_eval.py "
+        "repeatability with explicit snapshots and reuse counts."
+    )
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         Path(args.output).write_text(rendered + "\n", encoding="utf-8")

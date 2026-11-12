@@ -42,7 +42,7 @@ Fingerprint là SHA-256 của:
 - ranking policy version, ngày đánh giá dùng cho khoảng ngày kết thúc ở hiện tại;
 - trực tiếp các tham số điểm/coverage đang hiệu lực: score map, `MIN_EVIDENCE_COVERAGE`, `MIN_EVIDENCE_STRENGTH`, trọng số hai nhóm và cờ strict JSON Schema. Thay các giá trị này qua môi trường vẫn đổi fingerprint dù quên tăng version string.
 
-Nếu một `COMPLETED` assessment có cùng fingerprint tồn tại, worker bỏ qua application đó. Muốn đánh giá lại có chủ đích, phải tạo thay đổi có version mới — ví dụ HR sửa profile, duyệt rubric mới, hoặc vận hành tăng policy/prompt/rules/model runtime — rồi chạy lại operation. Không sửa trực tiếp kết quả đã lưu.
+Nếu một `COMPLETED` assessment có cùng fingerprint tồn tại, worker bỏ qua application đó. Khi semantic **tắt**, operation mới vẫn có thể tái sử dụng assessment có fingerprint giống hệt. Khi semantic **bật**, fingerprint bổ sung ID operation: operation khác phải đánh giá lại để không tái sử dụng kết quả của route BGE/lexical có khả dụng khác; cache vector theo route vẫn được tái sử dụng. Recovery cùng operation tái sử dụng assessment đã hoàn thành nếu fingerprint và môi trường hiệu lực không thay đổi; thay gate/cấu hình môi trường có thể tạo fingerprint mới. Đổi chính sách này làm tăng số lần gọi LLM/chi phí; cần đo drift và chi phí trước pilot. Không sửa trực tiếp kết quả đã lưu.
 
 ### 2.2 Chunk và requirement spec
 
@@ -102,7 +102,9 @@ Sau khi tăng version, chạy golden/repeatability, ghi kết quả vào release
 
 ## 4. Đo độ ổn định
 
-Module `backend/app/services/evaluation.py` và CLI `backend/scripts/evaluate_matching.py` đo:
+Module `backend/app/services/evaluation.py` và CLI `backend/scripts/evaluate_matching.py` cung cấp **diagnostic lịch sử**, không chứng minh acceptance: `passed` trong phép tính library hay Langfuse không đủ thông tin về cohort/rerun/ranking thật. CLI legacy đánh dấu `diagnostic_only`, `passed=false`, và `--check` luôn thoát 2. Với contract snapshot tường minh, xem `doc/OFFLINE_MATCHING_SYNTHETIC.md` và `offline_matching_eval.py repeatability`.
+
+Các metric diagnostic gồm:
 
 - mean/max/P95 độ lệch điểm;
 - số lượng và tỉ lệ criterion flip;
@@ -143,12 +145,13 @@ Exporter chính thức chỉ đọc `backend/scripts/export_matching_snapshot.py
 
 ```bash
 cd backend
-.venv/bin/python scripts/evaluate_matching.py /path/to/snapshots.json --check
-.venv/bin/python scripts/evaluate_matching.py /path/to/snapshots.json \
-  --output /path/to/report.json --check
+# Diagnostic lịch sử, không ký nghiệm thu:
+.venv/bin/python scripts/evaluate_matching.py /path/to/snapshots.json
+# Contract mới, snapshot tường minh và reuse counts:
+.venv/bin/python scripts/offline_matching_eval.py repeatability /path/to/paired-snapshots.json --check
 ```
 
-`--check` trả exit code `2` khi không đạt ngưỡng.
+Legacy `--check` luôn thoát `2`. Contract mới cũng thoát `2` khi FAIL/INSUFFICIENT_DATA hoặc input lỗi; PASS chỉ là đạt ngưỡng tính toán, vẫn cần xác thực provenance và HR review.
 
 ### 4.3 Ngưỡng chấp nhận
 

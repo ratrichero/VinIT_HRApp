@@ -123,7 +123,12 @@ def validate_runtime(runtime: dict[str, Any], *, require_provider_name: bool = F
 
 def public_runtime(runtime: dict[str, Any]) -> dict[str, Any]:
     """Runtime data safe for API responses and persisted operation snapshots."""
-    public = {key: value for key, value in runtime.items() if key not in _SECRET_FIELDS}
+    public = {key: value for key, value in runtime.items() if key not in _SECRET_FIELDS and key != "fallbacks"}
+    if "fallbacks" in runtime:
+        public["fallbacks"] = [public_runtime(item) for item in runtime["fallbacks"]]
+    if isinstance(runtime.get("bge_chain"), dict):
+        chain = runtime["bge_chain"]
+        public["bge_chain"] = {**chain, "routes": [public_runtime(route) for route in chain.get("routes", [])]}
     public["api_key_configured"] = bool(
         runtime.get("api_key_configured") or runtime.get("api_key") or runtime.get("api_key_ciphertext")
     )
@@ -158,7 +163,7 @@ def sanitize_provider_snapshot(
     if not isinstance(runtime, dict):
         runtime = {}
     reduced = {
-        "model_name": runtime.get("model_name"),
+        "model_name": snapshot.get("actual_model") or runtime.get("model_name"),
         "provider_returned_model": snapshot.get("provider_returned_model"),
         "system_fingerprint": snapshot.get("system_fingerprint"),
     }
@@ -198,26 +203,53 @@ def get_runtime_by_id(db, config_id: str, *, include_secret: bool = True) -> dic
     return _database_runtime(row, include_secret=include_secret) if row else None
 
 
-def get_active_runtime(db, *, include_secret: bool = True) -> dict[str, Any]:
+def get_active_runtime(db, *, include_secret: bool = False) -> dict[str, Any]:
     row = db.execute(text("""
         SELECT config_id, provider, provider_name, model_name, api_base, temperature_default,
-               api_key_ciphertext, api_key_hint
+               api_key_ciphertext, api_key_hint, fallback_config_ids
         FROM app_private.ai_configuration_versions WHERE status = 'ACTIVE'
         ORDER BY enabled_at DESC NULLS LAST LIMIT 1
     """)).mappings().first()
     if not row:
         return environment_runtime()
-    return _database_runtime(row, include_secret=include_secret)
+    runtime = _database_runtime(row, include_secret=include_secret)
+    fallback_ids = row.get("fallback_config_ids") or []
+    if (not isinstance(fallback_ids, list) or len(fallback_ids) > 3
+            or not all(isinstance(item, str) for item in fallback_ids)
+            or len(set(fallback_ids)) != len(fallback_ids)):
+        raise AIConfigError("Invalid LLM fallback configuration")
+    fallbacks = []
+    for fallback_id in fallback_ids:
+        if not isinstance(fallback_id, str) or fallback_id == runtime["config_id"]:
+            raise AIConfigError("Invalid LLM fallback configuration")
+        # Resolve fallback secrets lazily only if that route is attempted.
+        fallback = get_runtime_by_id(db, fallback_id, include_secret=False)
+        if not fallback:
+            raise AIConfigError("LLM fallback configuration not found")
+        fallbacks.append(fallback)
+    runtime["fallbacks"] = fallbacks
+    return runtime
 
 
 def hydrate_runtime_secret(db, runtime: dict[str, Any]) -> dict[str, Any]:
     """Attach the stored key to a pinned public snapshot, in memory only."""
-    if not runtime or runtime.get("api_key") or not runtime.get("config_id"):
-        return runtime
-    stored = get_runtime_by_id(db, str(runtime["config_id"]), include_secret=True)
-    if not stored:
+    if not runtime:
         return runtime
     hydrated = dict(runtime)
+    if runtime.get("api_key") or not runtime.get("config_id"):
+        return hydrated
+    stored = get_runtime_by_id(db, str(runtime["config_id"]), include_secret=True)
+    if not stored:
+        if runtime.get("api_key_configured"):
+            raise AIConfigError("Pinned AI configuration not found")
+        return hydrated
+    # Never attach a credential to a changed endpoint/model snapshot.
+    if (stored.get("api_base") != runtime.get("api_base")
+            or stored.get("model_name") != runtime.get("model_name")
+            or stored.get("provider") != runtime.get("provider")):
+        raise AIConfigError("Pinned AI configuration does not match stored version")
+    if runtime.get("api_key_configured") and not stored.get("api_key"):
+        raise AIConfigError("Pinned AI credential unavailable")
     if stored.get("api_key"):
         hydrated["api_key"] = stored["api_key"]
     hydrated["api_key_configured"] = bool(stored.get("api_key_configured"))

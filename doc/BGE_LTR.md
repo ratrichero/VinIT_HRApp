@@ -1,6 +1,6 @@
 # BGE, pgvector và Learning-to-Rank (LTR) cho VinIT HRApp
 
-> Cập nhật: 2026-11-07
+> Ghi chú lịch sử: tài liệu ban đầu ngày 2026-11-07. Các nhận định cũ về trạng thái môi trường và readiness không được xem là xác nhận hiện tại; xem [AI_ADMIN_ROUTING_STATUS.md](AI_ADMIN_ROUTING_STATUS.md) cho thay đổi mã mới, gate và giới hạn chưa triển khai.
 > Phạm vi: semantic retrieval bằng embedding model họ BGE, lưu/truy vấn vector bằng pgvector, và Learning-to-Rank cho bước xếp hạng ứng viên.
 > Nguyên tắc xuyên suốt: BGE chỉ hỗ trợ *tìm ứng viên bằng chứng*; LTR chỉ hỗ trợ *sắp xếp lại có kiểm soát*. Cả hai không thay thế deterministic rules, mandatory gate, evidence verification hoặc quyết định của HR.
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | pgvector | Đã có migration `00010_pgvector_bge_ltr.sql`, bảng embedding `vector(1024)`, HNSW cosine index và registry LTR | Migration đã áp lên Supabase project hiện tại |
 | BGE provider | Đã có provider `bge_http` theo OpenAI-compatible `/embeddings` | Mặc định đang tắt; chưa coi là production-ready nếu chưa cấu hình endpoint thật và đo trên golden set HR |
-| Semantic retrieval | Đã tích hợp vào worker: embed CV chunks + requirement query, truy vấn pgvector/in-memory, merge với lexical chunks | Có thể pilot ngay bằng Cloudflare Workers AI BGE-M3 free tier hoặc endpoint self-host |
+| Semantic retrieval | Đã tích hợp vào worker: embed CV chunks + requirement query, truy vấn pgvector/in-memory, merge với lexical chunks | Pilot cần được duyệt riêng về phạm vi, privacy, egress, môi trường và provider; chưa có benchmark HR gold |
 | Nemotron-3-Embed-1B | Chưa tích hợp trực tiếp | Phù hợp để nghiên cứu/pilot, nhưng không drop-in vì native dimension 2048 và contract query/passage khác |
 | LTR algorithm | Đã có pairwise logistic ranker, train offline, holdout theo group, quality gates, registry DRAFT/APPROVED/REJECTED | Chưa được bật ACTIVE |
 | LTR runtime | Đã có `OFF/SHADOW/ACTIVE`, ghi `ltr_score`, chỉ reorder trong cùng mandatory status và coverage gate khi ACTIVE | Đang mặc định `OFF`; chưa có HR gold dataset và artifact APPROVED |
@@ -517,7 +517,7 @@ Yêu cầu phê duyệt:
 - Người train và người approve nên khác nhau nếu có thể.
 - Lý do phê duyệt phải đối chiếu được với báo cáo holdout, dataset hash và phạm vi position áp dụng.
 - Nếu artifact không đạt yêu cầu, reject thay vì để DRAFT mơ hồ.
-- Chưa có UI approval riêng; Admin API là bề mặt phê duyệt có audit hiện tại.
+- Trong mã mới, Admin UI cũng có bề mặt review model và chọn managed SHADOW/OFF; xem `AI_ADMIN_ROUTING_STATUS.md`. Code chưa được triển khai và chọn cấu hình không thay thế quyết định pilot.
 
 ### Bước 4: Chạy SHADOW
 
@@ -598,7 +598,7 @@ Sau ACTIVE cần theo dõi:
 |---|---|---|
 | HR gold dataset | Bắt buộc | Không có dataset này thì LTR chỉ dừng ở thử nghiệm |
 | Rubric chấm nhãn + adjudication | Bắt buộc | Giảm nhiễu nhãn và leakage |
-| Quy trình approve artifact | Đã có nền tảng | Migration 00011 + Admin API approve/reject đã có actor/reason/hash/audit; còn thiếu UI và kiểm thử trên staging |
+| Quy trình approve artifact | Đã có nền tảng trong mã | API + UI review và managed SHADOW/OFF có actor/reason/hash/audit; chưa triển khai hay kiểm thử staging |
 | SHADOW evaluation report | Bắt buộc trước ACTIVE | So sánh ranking hiện tại vs LTR theo position/gate |
 | Monitoring sau ACTIVE | Bắt buộc | Drift, gate violations, model load failures |
 | HR labelling UI/API | Khuyến nghị mạnh | Cần nếu làm LTR lâu dài thay vì file thủ công |

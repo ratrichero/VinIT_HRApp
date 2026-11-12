@@ -810,10 +810,30 @@ def test_group_weights_are_approved_immutable_and_drive_worker_score(client, see
         assert conn.execute(text("SELECT COUNT(*) FROM app_private.audit_events WHERE action_type='UPDATE_CRITERIA_WEIGHTS'")).scalar_one() == 1
 
 
-def test_assessment_reuse_rule_first_and_fallback_chunks(client, seed, tmp_path, monkeypatch):
+@pytest.mark.parametrize("semantic_enabled", [False, True])
+def test_assessment_reuse_rule_first_and_fallback_chunks(client, seed, tmp_path, monkeypatch, semantic_enabled):
     from app.core.config import settings
     from app.workers.processor import worker, llm_client
+    import app.workers.processor as processor_module
+    from app.services.embedding import EmbeddingError
     monkeypatch.setattr(settings, "LOCAL_STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", semantic_enabled)
+    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", semantic_enabled)
+    state = {"primary_fails": True}
+    calls = []
+    chain = {"route_set_id": "synthetic-set", "routes": [
+        {"config_id": "primary", "config": {"model_name": "test", "top_k": 5, "min_similarity": 0}},
+        {"config_id": "backup", "config": {"model_name": "test", "top_k": 5, "min_similarity": 0}}]}
+    class Provider:
+        model, dimension = "test", 1024
+        def __init__(self, name): self.name = name
+        async def embed(self, texts, *, kind):
+            calls.append((self.name, kind))
+            if self.name == 'primary' and kind == 'query' and state['primary_fails']:
+                raise EmbeddingError('synthetic')
+            return [[1.0, 0.0] + [0.0] * 1022 for _ in texts]
+    monkeypatch.setattr(processor_module, 'load_active_bge_chain', lambda db: chain)
+    monkeypatch.setattr(processor_module, 'provider_for_pinned_route', lambda db, route: Provider(route['config_id']))
     fallback_criterion = uid()
     with engine.begin() as conn:
         conn.execute(text("""
@@ -859,12 +879,28 @@ def test_assessment_reuse_rule_first_and_fallback_chunks(client, seed, tmp_path,
         assert sources[fallback_criterion] == "LLM"
         assert conn.execute(text("SELECT COUNT(*) FROM app_private.assessment_runs WHERE status='COMPLETED' AND assessment_fingerprint IS NOT NULL")).scalar_one() == 1
 
+    if semantic_enabled:
+        assert ('primary', 'query') in calls and ('backup', 'query') in calls
+        with engine.connect() as conn:
+            snapshot = conn.execute(text("SELECT provider_model_snapshot FROM app_private.assessment_runs WHERE status='COMPLETED'")).scalar_one()
+            assert snapshot['semantic_route']['route_config_id'] == 'backup'
+            pinned = conn.execute(text("SELECT ai_config_snapshot FROM app_private.operations WHERE operation_id=:id"), {'id': upload.json()['operation_id']}).scalar_one()
+            assert pinned['bge_chain']['route_set_id'] == 'synthetic-set'
+    state['primary_fails'] = False
     queued = client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed["hr"]))
     assert queued.status_code == 202
     worker._process_pending_operations()
-    assert len(match_calls) == 1
+    assert len(match_calls) == (2 if semantic_enabled else 1)
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT COUNT(*) FROM app_private.assessment_runs WHERE status='COMPLETED'")).scalar_one() == 1
+        assert conn.execute(text("SELECT COUNT(*) FROM app_private.assessment_runs WHERE status='COMPLETED'")).scalar_one() == (2 if semantic_enabled else 1)
+        if semantic_enabled:
+            snapshots = conn.execute(text("SELECT provider_model_snapshot FROM app_private.assessment_runs WHERE status='COMPLETED' ORDER BY created_at")).scalars().all()
+            assert [s['semantic_route']['route_config_id'] for s in snapshots] == ['backup', 'primary']
+    if semantic_enabled:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE app_private.operations SET status='PROCESSING' WHERE operation_id=:id"), {'id': queued.json()['operation_id']})
+        worker._process_pending_operations()
+        assert len(match_calls) == 2  # a recovered operation preserves already-completed assessments
 
 
 def test_revoked_requester_cannot_read_operation_progress(client, seed):
@@ -2093,3 +2129,323 @@ def test_retention_fence_blocks_feedback_and_new_work_after_failure(client, seed
     assert client.post(f"/v1/shortlist/{share}/feedback", headers=headers(seed["hm"]), json={"content":"shared"}).status_code == 409
     assert client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed["hr"])).status_code == 409
     assert client.post("/v1/shortlist/share", headers=headers(seed["hr"]), json={"position_id":seed["pos"], "shared_with_user_id":seed["hm"], "application_ids":[seed["app"]]}).status_code == 409
+
+
+def test_llm_fallback_versions_are_pinned_ordered_and_secrets_stay_private(client, seed, monkeypatch):
+    from cryptography.fernet import Fernet
+    from app.core.config import settings
+    from app.services.ai_config import get_active_runtime, hydrate_runtime_secret, runtime_snapshot
+    from app.db.database import SessionLocal
+    monkeypatch.setattr(settings, "AI_CONFIG_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "ALLOW_EXTERNAL_API", False)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {"id": seed["other"]})
+    admin = headers(seed["other"])
+
+    def create(name, port, **kwargs):
+        body = {"provider": "compatible", "provider_name": name, "model_name": name,
+                "api_base": f"http://127.0.0.1:{port}/v1", "api_key": f"key-{name}-123456789", **kwargs}
+        return client.post("/v1/admin/ai/config", headers=admin, json=body)
+
+    fallback = create("backup", 11435)
+    assert fallback.status_code == 201, fallback.text
+    fallback_id = fallback.json()["config_id"]
+    assert create("bad", 11434, fallback_config_ids=[fallback_id]).status_code == 400
+    primary = create("primary", 11434, fallback_config_ids=[fallback_id], fallback_destinations_approved=True)
+    assert primary.status_code == 201, primary.text
+    primary_id = primary.json()["config_id"]
+    assert client.post(f"/v1/admin/ai/config/{primary_id}/enable", headers=admin).status_code == 200
+    active = client.get("/v1/admin/ai/active-config", headers=admin).json()["config"]
+    assert [r["config_id"] for r in active["fallbacks"]] == [fallback_id]
+    assert "key-primary" not in str(active) and "key-backup" not in str(active)
+    db = SessionLocal()
+    try:
+        runtime = get_active_runtime(db)
+        snapshot = runtime_snapshot(runtime)
+        assert "key-primary" not in str(snapshot) and "key-backup" not in str(snapshot)
+        restored = hydrate_runtime_secret(db, snapshot)
+        assert restored["api_key"] == "key-primary-123456789"
+        assert "api_key" not in restored["fallbacks"][0]
+        backup = hydrate_runtime_secret(db, restored["fallbacks"][0])
+        assert backup["api_key"] == "key-backup-123456789"
+    finally:
+        db.close()
+
+
+def test_bge_ltr_admin_drafts_are_secret_safe_and_do_not_activate(client, seed, monkeypatch):
+    from cryptography.fernet import Fernet
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "AI_CONFIG_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", False)
+    monkeypatch.setattr(settings, "LTR_MODE", "OFF")
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {"id": seed["other"]})
+    admin = headers(seed["other"])
+    body = {"provider_name": "Synthetic", "model_name": "bge-synthetic", "api_base": "https://example.test/v1",
+            "api_key": "synthetic-provider-key-999", "dimension": 1024, "index_version": "synthetic-v1"}
+    assert client.post('/v1/admin/ai/bge/drafts', headers=headers(seed['hr']), json=body).status_code == 403
+    assert client.post('/v1/admin/ai/bge/drafts', headers=admin, json={**body, "dimension": 768}).status_code == 422
+    response = client.post('/v1/admin/ai/bge/drafts', headers=admin, json=body)
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert result['runtime_active'] is False and result['api_key_configured']
+    assert 'synthetic-provider-key-999' not in response.text
+    assert 'synthetic-provider-key-999' not in client.get('/v1/admin/ai/auxiliary-drafts', headers=admin).text
+    with engine.connect() as conn:
+        stored = conn.execute(text("SELECT api_key_ciphertext, config FROM app_private.ai_auxiliary_config_drafts WHERE config_id=:id"), {"id": result['config_id']}).mappings().one()
+        assert 'synthetic-provider-key-999' not in str(stored)
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE object_id=:id AND action_type='CREATE_AI_AUXILIARY_DRAFT'"), {"id": result['config_id']}).scalar_one() == 1
+    assert client.post('/v1/admin/ai/ltr/drafts', headers=admin, json={"mode": "SHADOW", "model_version": "absent"}).status_code == 400
+    ltr = client.post('/v1/admin/ai/ltr/drafts', headers=admin, json={"mode": "OFF"})
+    assert ltr.status_code == 201 and ltr.json()['runtime_active'] is False
+    assert settings.SEMANTIC_RETRIEVAL_ENABLED is False and settings.LTR_MODE == "OFF"
+
+
+def test_bge_route_set_is_ordered_audited_and_gated(client, seed, monkeypatch):
+    from cryptography.fernet import Fernet
+    from app.core.config import settings
+    from app.db.database import SessionLocal
+    from app.services.ai_config import runtime_snapshot
+    from app.services.bge_routes import load_active_bge_chain, provider_for_pinned_route
+
+    monkeypatch.setattr(settings, "AI_CONFIG_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "ALLOW_EXTERNAL_API", True)
+    monkeypatch.setattr(settings, "SEMANTIC_RETRIEVAL_ENABLED", False)
+    monkeypatch.setattr(settings, "ALLOW_MANAGED_BGE_ROUTING", False)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.bge_route_sets SET status='DISABLED' WHERE status='ACTIVE'"))
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {"id": seed["other"]})
+    admin = headers(seed["other"])
+    ids = []
+    for i in range(2):
+        body = {"provider_name": f"Synthetic {i}", "model_name": "bge-test", "api_base": f"https://provider{i}.example/v1",
+                "api_key": f"synthetic-key-{i}", "dimension": 1024, "index_version": "test"}
+        response = client.post('/v1/admin/ai/bge/drafts', headers=admin, json=body)
+        assert response.status_code == 201, response.text
+        ids.append(response.json()['config_id'])
+    path = '/v1/admin/ai/bge/route-set'
+    assert client.post(path, headers=headers(seed['hr']), json={"route_config_ids": ids, "destinations_approved": True}).status_code == 403
+    assert client.post(path, headers=admin, json={"route_config_ids": ids}).status_code == 400
+    assert client.post(path, headers=admin, json={"route_config_ids": ids * 2, "destinations_approved": True}).status_code == 422
+    response = client.post(path, headers=admin, json={"route_config_ids": ids, "destinations_approved": True})
+    assert response.status_code == 201, response.text
+    assert response.json()['runtime_enabled'] is False
+    selection = client.get(path, headers=admin)
+    assert [r['config_id'] for r in selection.json()['route_set']['routes']] == ids
+    assert 'synthetic-key' not in selection.text
+    db = SessionLocal()
+    try:
+        chain = load_active_bge_chain(db)
+        restored = runtime_snapshot({"bge_chain": chain})['bge_chain']
+        assert provider_for_pinned_route(db, restored['routes'][1]).api_key == 'synthetic-key-1'
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE object_id=:id AND action_type='SELECT_BGE_ROUTE_SET'"), {"id": response.json()['route_set_id']}).scalar_one() == 1
+        reverse = client.post(path, headers=admin, json={"route_config_ids": ids[::-1], "destinations_approved": True})
+        assert reverse.status_code == 201
+        assert [r['config_id'] for r in restored['routes']] == ids  # existing pinned snapshot is immutable
+        assert [r['config_id'] for r in load_active_bge_chain(db)['routes']] == ids[::-1]
+    finally:
+        db.close()
+    # Two concurrent selections serialize; one active version remains and both are audited.
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    barrier = threading.Barrier(2)
+    def change(order):
+        barrier.wait(timeout=5)
+        return client.post(path, headers=admin, json={"route_config_ids": order, "destinations_approved": True})
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(change, [ids, ids[::-1]]))
+    assert [r.status_code for r in results] == [201, 201]
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM app_private.bge_route_sets WHERE status='ACTIVE'")).scalar_one() == 1
+        for result in results:
+            assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE object_id=:id AND action_type='SELECT_BGE_ROUTE_SET'"), {'id': result.json()['route_set_id']}).scalar_one() == 1
+    from sqlalchemy.exc import DBAPIError
+    with pytest.raises(DBAPIError):
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE app_private.bge_route_sets SET route_config_ids='[]'::jsonb WHERE route_set_id=:id"), {'id': results[0].json()['route_set_id']})
+
+
+def test_bge_pgvector_ignores_stale_chunk_hash_even_when_hash_matches_another_chunk(seed, monkeypatch):
+    import asyncio
+    from app.core.config import settings
+    from app.db.database import SessionLocal
+    from app.services.embedding import chunk_text_sha256, vector_literal
+    from app.workers.processor import ProcessingWorker
+
+    monkeypatch.setattr(settings, 'SEMANTIC_RETRIEVAL_ENABLED', True)
+    diagnostics = []
+    monkeypatch.setattr('app.workers.processor.record_semantic_run', lambda **data: diagnostics.append(data))
+    document_id = uid()
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO app_private.application_documents
+            (document_id, application_id, bucket, storage_path, original_filename, mime_type, size_bytes, file_processing_status)
+            VALUES (:id, :app, 'synthetic', :path, 'cv.txt', 'text/plain', 10, 'COMPLETED')"""),
+            {'id': document_id, 'app': seed['app'], 'path': document_id})
+        conn.execute(text("""INSERT INTO app_private.cv_chunk_embeddings
+            (application_id, document_id, chunk_id, chunk_text_sha256, char_start, char_end, embedding, embedding_model, index_version)
+            VALUES (:app, :doc, 'c1', :hash, 0, 3, CAST(:vector AS vector), 'test-model', 'test-index')"""),
+            {'app': seed['app'], 'doc': document_id, 'hash': chunk_text_sha256('old'),
+             'vector': vector_literal([1.0] + [0.0] * 1023)})
+    class Provider:
+        model, dimension = 'test-model', 1024
+        async def embed(self, texts, *, kind):
+            vector = ([1.0, 0.0] if kind == 'query' else [0.0, 1.0]) + [0.0] * 1022
+            return [vector for _ in texts]
+    data = {'chunks': [{'chunk_id': 'c1', 'text': 'current', 'char_start': 0, 'char_end': 7},
+                       {'chunk_id': 'c2', 'text': 'old', 'char_start': 0, 'char_end': 3}],
+            'fallback_chunks': {'x': []}}
+    db, loop = SessionLocal(), asyncio.new_event_loop()
+    try:
+        result = ProcessingWorker.__new__(ProcessingWorker)._semantic_fallback_one(
+            db, loop, application_id=seed['app'], document_id=document_id, deterministic_result=data,
+            unresolved_criteria=[{'criterion_id': 'x', 'name': 'test'}], provider=Provider(),
+            index_version='test-index', top_k=1, min_similarity=-1)
+        assert result['x'][0]['semantic_similarity'] == 0.0
+        assert diagnostics[-1]['pgvector_status'] == 'AVAILABLE'
+        assert db.execute(text("SELECT count(*) FROM app_private.cv_chunk_embeddings WHERE document_id=:id"), {'id': document_id}).scalar_one() == 3
+    finally:
+        db.rollback()
+        db.close()
+        loop.close()
+
+
+def test_ltr_managed_shadow_approval_gates_rollback_and_worker(client, seed, tmp_path, monkeypatch):
+    import json
+    from app.core.config import settings
+    from app.db.database import SessionLocal
+    from app.services.ai_config import runtime_snapshot
+    from app.services.ltr import FEATURE_NAMES, artifact_sha256
+    from app.services.ltr_managed import current_selection, resolve_shadow
+    from app.services.matching import matching_engine
+    from app.workers.processor import worker, llm_client
+
+    monkeypatch.setattr(settings, 'LOCAL_STORAGE_PATH', str(tmp_path))
+    monkeypatch.setattr(settings, 'ALLOW_MANAGED_LTR_ROUTING', True)
+    monkeypatch.setattr(settings, 'LTR_MODE', 'SHADOW')
+    version = 'synthetic-' + uid()
+    artifact = {'artifact_type': 'pairwise-logistic-ltr', 'model_version': version,
+                'feature_names': list(FEATURE_NAMES), 'means': [0.0] * len(FEATURE_NAMES),
+                'stds': [1.0] * len(FEATURE_NAMES), 'weights': [0.1] * len(FEATURE_NAMES),
+                'training': {'test_examples': 25, 'test_groups': 3},
+                'metrics': {'test': {'ndcg_at_10': .8, 'pairwise_accuracy': .8}}}
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.ltr_managed_selections SET current=false, retired_at=NOW() WHERE current"))
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {'id': seed['other']})
+        conn.execute(text("""INSERT INTO app_private.ltr_model_versions
+            (model_version,artifact,metrics,feature_names,artifact_sha256,status,registered_by)
+            VALUES (:version,CAST(:artifact AS jsonb),CAST(:metrics AS jsonb),CAST(:features AS jsonb),:hash,'DRAFT',:by)"""),
+            {'version': version, 'artifact': json.dumps(artifact), 'metrics': json.dumps(artifact['metrics']),
+             'features': json.dumps(artifact['feature_names']), 'hash': artifact_sha256(artifact), 'by': seed['hr']})
+    admin = headers(seed['other'])
+    assert client.post(f'/v1/admin/ltr/models/{version}/approve', headers=headers(seed['hr']), json={'reason': 'synthetic'}).status_code == 403
+    draft = client.post('/v1/admin/ai/ltr/drafts', headers=admin, json={'mode': 'SHADOW', 'model_version': version})
+    assert draft.status_code == 201, draft.text
+    select = '/v1/admin/ai/ltr/selection'
+    body = {'mode': 'SHADOW', 'draft_config_id': draft.json()['config_id'], 'reason': 'synthetic only', 'shadow_approved': True}
+    assert client.post(select, headers=admin, json=body).status_code == 409  # DRAFT is not approved
+    assert client.post(select, headers=headers(seed['hr']), json=body).status_code == 403
+    assert client.post(select, headers=admin, json={**body, 'shadow_approved': False}).status_code == 400
+    assert client.post(select, headers=admin, json={**body, 'mode': 'ACTIVE'}).status_code == 422
+    review = client.post(f'/v1/admin/ltr/models/{version}/approve', headers=admin, json={'reason': 'synthetic review only'})
+    assert review.status_code == 200, review.text
+    selected = client.post(select, headers=admin, json=body)
+    assert selected.status_code == 201, selected.text
+    selection_id = selected.json()['selection_id']
+    db = SessionLocal()
+    try:
+        pinned = current_selection(db)
+        assert runtime_snapshot({'ltr_selection': pinned})['ltr_selection'] == pinned
+        assert resolve_shadow(db, pinned).model_version == version
+        db.rollback()
+        monkeypatch.setattr(settings, 'LTR_MODE', 'ACTIVE')
+        assert resolve_shadow(db, pinned) is None  # managed ACTIVE is not implemented
+        monkeypatch.setattr(settings, 'LTR_MODE', 'OFF')
+        assert resolve_shadow(db, pinned) is None
+        monkeypatch.setattr(settings, 'LTR_MODE', 'SHADOW')
+        monkeypatch.setattr(settings, 'ALLOW_MANAGED_LTR_ROUTING', False)
+        assert resolve_shadow(db, pinned) is None
+        monkeypatch.setattr(settings, 'ALLOW_MANAGED_LTR_ROUTING', True)
+    finally:
+        db.close()
+
+    # A changed artifact cannot reuse the approval or the pinned selection.
+    tampered = {**artifact, 'weights': [0.2] * len(FEATURE_NAMES)}
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.ltr_model_versions SET artifact=CAST(:artifact AS jsonb) WHERE model_version=:version"), {'artifact': json.dumps(tampered), 'version': version})
+    assert client.post(select, headers=admin, json=body).status_code == 409
+    assert client.get(select, headers=admin).json()['selection']['selection_id'] == selection_id
+    db = SessionLocal()
+    try:
+        from app.services.ltr import LTRError
+        with pytest.raises(LTRError):
+            resolve_shadow(db, pinned)
+    finally:
+        db.rollback(); db.close()
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.ltr_model_versions SET artifact=CAST(:artifact AS jsonb) WHERE model_version=:version"), {'artifact': json.dumps(artifact), 'version': version})
+    # Once publication holds the selection lock, rollback waits instead of
+    # changing that transaction's model mid-ranking.
+    db = SessionLocal()
+    try:
+        assert resolve_shadow(db, pinned)
+        from sqlalchemy.exc import OperationalError
+        with engine.connect() as contender:
+            contender.execute(text("SET LOCAL lock_timeout='150ms'"))
+            with pytest.raises(OperationalError):
+                contender.execute(text("UPDATE app_private.ltr_managed_selections SET current=false WHERE selection_id=:id"), {'id': selection_id})
+            contender.rollback()
+    finally:
+        db.rollback(); db.close()
+    from sqlalchemy.exc import DBAPIError
+    with pytest.raises(DBAPIError):
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE app_private.ltr_managed_selections SET reason='tampered' WHERE selection_id=:id"), {'id': selection_id})
+
+    # Exercise the actual worker publication path with synthetic documents.
+    async def extract(**kwargs):
+        return {'education': [], 'work_history': [], 'skills': ['Python'], 'certifications': []}
+    async def match(**kwargs):
+        return {'findings': []}
+    monkeypatch.setattr(llm_client, 'extract_candidate_profile', extract)
+    monkeypatch.setattr(llm_client, 'match_criterion_evidence', match)
+    approve = f"/v1/criteria/{seed['cv']}/approve"
+    assert client.post(approve, headers=headers(seed['hr']), json={'action': 'APPROVE'}).status_code == 200
+    assert client.post(approve, headers=headers(seed['hm']), json={'action': 'APPROVE'}).status_code == 200
+    files = []
+    for i in (5, 6):
+        doc = Document(); doc.add_paragraph('WORK EXPERIENCE')
+        doc.add_paragraph(f'Developed Python systems for {i} years, including reliable production services and automated testing.')
+        data = io.BytesIO(); doc.save(data)
+        files.append(('files', (f'candidate-{i}.docx', data.getvalue())))
+    upload = client.post(f"/v1/applications/upload-batch/{seed['pos']}", headers=headers(seed['hr']), files=files)
+    assert upload.status_code == 202, upload.text
+    worker._process_pending_operations()
+    with engine.connect() as conn:
+        run = conn.execute(text("SELECT ranking_run_id, ltr_mode, ltr_model_version, ltr_selection_id FROM app_private.ranking_runs WHERE operation_id=:id"), {'id': upload.json()['operation_id']}).mappings().one()
+        assert run['ltr_mode'] == 'SHADOW' and run['ltr_model_version'] == version and str(run['ltr_selection_id']) == selection_id
+        pinned_snapshot = conn.execute(text("SELECT ai_config_snapshot FROM app_private.operations WHERE operation_id=:id"), {'id': upload.json()['operation_id']}).scalar_one()
+        assert pinned_snapshot['ltr_selection']['selection_id'] == selection_id
+        rows = conn.execute(text("""SELECT ri.application_id, ri.rank_number, ri.ltr_score,
+            ar.matching_status, ar.matching_score, ar.evidence_coverage FROM app_private.ranking_items ri
+            JOIN app_private.assessment_runs ar ON ar.assessment_id=ri.assessment_id
+            WHERE ri.ranking_run_id=:id"""), {'id': run['ranking_run_id']}).mappings().all()
+        assert len(rows) == 2 and all(row['ltr_score'] is not None for row in rows)
+        baseline = matching_engine.rank_applications([{'application_id': row['application_id'],
+            'latest_assessment': {'matching_status': row['matching_status'], 'matching_score': row['matching_score'],
+                                  'evidence_coverage': row['evidence_coverage']}} for row in rows], [])
+        assert {str(row['application_id']): row['rank_number'] for row in rows} == {str(row['application_id']): row['rank_number'] for row in baseline}
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE object_id=:id AND action_type='SELECT_LTR_MANAGED'"), {'id': selection_id}).scalar_one() == 1
+    off = client.post(select, headers=admin, json={'mode': 'OFF', 'reason': 'synthetic rollback'})
+    assert off.status_code == 201
+    db = SessionLocal()
+    try:
+        assert resolve_shadow(db, pinned) is None  # old pin cannot revive a retired selection
+    finally:
+        db.close()
+    queued = client.post(f"/v1/assessments/run/{seed['pos']}", headers=headers(seed['hr']))
+    assert queued.status_code == 202
+    worker._process_pending_operations()
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT ltr_mode, ltr_selection_id FROM app_private.ranking_runs WHERE operation_id=:id"), {'id': queued.json()['operation_id']}).mappings().one()
+        assert row['ltr_mode'] == 'OFF' and row['ltr_selection_id'] is None
