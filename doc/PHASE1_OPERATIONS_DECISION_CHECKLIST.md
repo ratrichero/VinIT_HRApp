@@ -15,6 +15,15 @@
 | DR, monitoring, alerting, log/PII và bảo vệ branch | DevOps/Security | CHỜ — drill đã phê duyệt; alert lỗi retention/worker/storage, kiểm tra quyền repo; API protection trước đó 403 không chứng minh trạng thái |
 | Runbook phục hồi retention | DevOps + HR Lead/Admin | CHỜ REVIEW — xem `doc/RETENTION_RECOVERY_RUNBOOK.md`; phân vai dừng executor, xác nhận provider I/O đã ổn định, quyết định tiếp tục xóa |
 
+### Kiểm kê sơ bộ từ repository và bằng chứng đã ghi — chưa xác minh runtime
+
+- Backend `app/db/supabase.py` dùng `SUPABASE_SERVICE_ROLE_KEY` cho Supabase client phía server và `SUPABASE_ANON_KEY` cho client public; `app/api/auth.py` cũng dùng anon/publishable cho đăng nhập/đổi mật khẩu. Tên biến là tên lịch sử, không chứng minh key được cấu hình thuộc loại legacy hay mới; phải kiểm tra từng runtime và tính tương thích mà không in key.
+- `app/core/security.py` xác minh token bất đối xứng bằng JWKS và còn nhánh HS256 qua `SUPABASE_JWT_SECRET`; cần kiểm tra loại token và mọi consumer trước khi revoke. Backend/worker dùng chung cấu hình trong topology PM2 được tài liệu mô tả.
+- Các script test thủ công `retention_generate.py`, `retention_permissions_check.py`, `retention_lead_confirm.py`, `retention_execute_test.py`, `shortlist_e2e09_check.py` đọc `SUPABASE_ANON_KEY`; phải đưa vào danh sách consumer nếu còn sử dụng. Không chạy lại các script E2E đang treo.
+- Frontend trong repo dùng `/v1` proxy; không tìm thấy consumer trực tiếp của các biến Supabase trong source frontend đã rà. Điều này không chứng minh không có consumer ngoài repo, browser cũ hay pipeline khác.
+- Bằng chứng topology trước đó ghi PM2 `hra-backend`/worker cùng process và `hra-frontend`; VPS runbook khuyến nghị mỗi app một instance và backend một worker. Đây là bằng chứng lịch sử, **không phải trạng thái đo lại**. Cần xác nhận port/bind hiện tại; có khác biệt giữa runbook nội bộ và ghi nhận truy cập frontend qua public port.
+- Chưa có bằng chứng backup/restore hay DR drill trong lần rà này. Không suy từ việc có schema/Supabase đang hoạt động rằng có backup đầy đủ, khôi phục được hoặc đã bao gồm Storage.
+
 ## 2. HR/Privacy/Legal — feedback và retention
 
 | Quyết định | Người chốt | Đầu ra cần có |
