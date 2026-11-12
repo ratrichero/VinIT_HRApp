@@ -1,6 +1,6 @@
 # Tài liệu chờ triển khai — Phase 1
 
-> **Đối chiếu mới:** xem [`PHASE1_REMAINING_EXECUTION_PLAN.md`](PHASE1_REMAINING_EXECUTION_PLAN.md) cho trạng thái tổng hợp, các việc đang dở và mâu thuẫn thời gian cần xác minh. Các mô tả môi trường/commit ở dưới là snapshot lịch sử, không thay thế kiểm tra thực tế trước triển khai. E2E hiện vẫn tạm treo theo quyết định người dùng; E2E-09 đã có PASS bổ sung trong checklist, không còn là kịch bản chưa kiểm chứng.
+> **Đối chiếu mới:** xem [`PHASE1_PRODUCTION_DEFERRED_REPORT.md`](PHASE1_PRODUCTION_DEFERRED_REPORT.md) cho quyết định A1–A6 và phần B tạm treo; xem [`PHASE1_REMAINING_EXECUTION_PLAN.md`](PHASE1_REMAINING_EXECUTION_PLAN.md) cho trạng thái tổng hợp, các việc đang dở và mâu thuẫn thời gian cần xác minh. Các mô tả môi trường/commit ở dưới là snapshot lịch sử, không thay thế kiểm tra thực tế trước triển khai. E2E hiện vẫn tạm treo theo quyết định người dùng; E2E-09 đã có PASS bổ sung trong checklist, không còn là kịch bản chưa kiểm chứng.
 
 > Trạng thái tại ngày 2026-11-07: các nâng cấp Batch 1–5 đã có code, test, CI và migration tương ứng; Batch 5.1 đã chuẩn bị bộ dữ liệu/checklist staging. Tài liệu này lưu riêng những phần **đã sẵn sàng ở repository nhưng chưa được triển khai hoặc chưa được nghiệm thu trên môi trường đích**. Không mục nào trong tài liệu này được coi là đã hoàn thành chỉ vì đã có code, checklist hoặc migration.
 >

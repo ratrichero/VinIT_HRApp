@@ -1,6 +1,6 @@
 # Chuẩn bị song song: vận hành và quyết định Phase 1
 
-> Chỉ là checklist để phân công; chưa có mục nào được xác nhận, chưa cấp quyền thao tác hay chạy E2E. Không đưa mật khẩu, token, key, CV, prompt hay PII vào tài liệu. Không ghi giá trị secret; chỉ ghi loại key, nguồn cấu hình, owner và trạng thái đã xác minh.
+> Checklist thực hiện phần B được người dùng yêu cầu **tạm treo để quay lại khi cần**; chưa xác minh các kiểm soát thực tế, chưa cấp quyền thao tác hay chạy E2E. A1–A6 đã có quyết định riêng; xem [`PHASE1_PRODUCTION_DEFERRED_REPORT.md`](PHASE1_PRODUCTION_DEFERRED_REPORT.md). Không đưa mật khẩu, token, key, CV, prompt hay PII vào tài liệu. Không ghi giá trị secret; chỉ ghi loại key, nguồn cấu hình, owner và trạng thái đã xác minh.
 
 ## 1. DevOps/IT — DEP-03, DEP-04, DEP-08
 
@@ -13,7 +13,7 @@
 | Disable legacy key/revoke JWT secret | Chủ project | BLOCKED — chỉ thao tác thủ công sau khi mọi consumer đã kiểm chứng và có phương án rollback; không tự disable |
 | Backup DB và storage, retention backup, mã hóa, phân quyền và restore | DevOps/DBA | CHỜ — lịch, owner, RPO/RTO được phê duyệt, bằng chứng restore isolated; test phải được cấp phép |
 | DR, monitoring, alerting, log/PII và bảo vệ branch | DevOps/Security | CHỜ — drill đã phê duyệt; alert lỗi retention/worker/storage, kiểm tra quyền repo; API protection trước đó 403 không chứng minh trạng thái |
-| Runbook phục hồi retention | DevOps + HR Lead/Admin | CHỜ REVIEW — xem `doc/RETENTION_RECOVERY_RUNBOOK.md`; phân vai dừng executor, xác nhận provider I/O đã ổn định, quyết định tiếp tục xóa |
+| Runbook phục hồi retention | DevOps + HR Lead/Admin | Hướng A3 đã được người dùng và các bên liên quan xác nhận theo lời người dùng; CHỜ KIỂM CHỨNG VẬN HÀNH — xem `doc/RETENTION_RECOVERY_RUNBOOK.md`, phân vai dừng executor, xác nhận provider I/O đã ổn định và quyết định tiếp tục xóa |
 
 ### Kiểm kê sơ bộ từ repository và bằng chứng đã ghi — chưa xác minh runtime
 
@@ -28,7 +28,7 @@
 
 | Quyết định | Người chốt | Đầu ra cần có |
 |---|---|---|
-| Ghi chú/feedback chung trong shortlist có nhiều ứng viên | HR Lead + Privacy/Legal | Quy tắc xác định thông tin cá nhân, trách nhiệm review/redact/xóa, phê duyệt và audit; không mặc định xóa nội dung của người khác |
+| Ghi chú/feedback chung trong shortlist có nhiều ứng viên | HR Lead + Privacy/Legal | A1/A2 đã được xác nhận theo lời người dùng: chặn purge có nội dung chung, không tự xóa và chặn phản hồi chung mới trên share sau purge. CHỜ quy trình review/redact/xóa cụ thể, trách nhiệm và audit |
 | Shares đã purge trước guard và feedback về sau | Privacy/Legal + IT | Phương án kiểm kê an toàn, phạm vi lịch sử và cách xử lý; không suy ra đã sạch vì item đã mất liên kết |
 | Retention 12 tháng, phạm vi đã tuyển, legal hold/ngoại lệ | Legal/Privacy + HR | Chính sách chính thức và quy trình giải quyết ngoại lệ. Không tự bật scheduler/automation |
 | Phê duyệt egress và provider/model/storage | IT Security + Legal + HR | Kiểm kê hồi cứu, vùng xử lý, retention/training/xóa, hợp đồng và phê duyệt; redaction best-effort không phải ẩn danh tuyệt đối |
@@ -38,7 +38,7 @@
 | Việc | Người chốt | Đầu ra cần có |
 |---|---|---|
 | Policy điểm, mandatory và định nghĩa `UNCLEAR` | HR Lead + HM | Quy tắc chấm có ký duyệt; giữ Python tối thiểu 4 năm và partial 2 năm `UNCLEAR` chờ xác minh, không sửa manifest tự ý |
-| Duplicate theo nội dung file | PO + HR | Quyết định có thuộc Phase 1 hay chấp nhận giới hạn hiện tại; không thêm cross-position/merge tự động |
+| Duplicate theo nội dung file | PO + HR | ĐÃ CHỐT A4: Phase 1 chấp nhận giới hạn exact email/SĐT cùng vị trí; không yêu cầu detector nội dung file trong phạm vi này, không thêm cross-position/merge tự động |
 | Tập pilot được phép | HR/HM + Privacy | Nguồn dữ liệu, mục đích/consent, người dán nhãn/phân xử, bao phủ nhóm IT, phân chia holdout và data handling; không sao chép CV thật vào Git |
 | Metric/evaluation contract | HR/HM + kỹ thuật | Định nghĩa denominator, threshold, cách đo extraction/matching/mandatory false negative/quote/NDCG@5 và cách công bố theo nhóm |
 | Workflow Core D-01…D-10 | HR/HM/IT | Quyết định riêng khi muốn mở Phase 2; direct approval hiện hữu không bị vô tình loại bỏ |

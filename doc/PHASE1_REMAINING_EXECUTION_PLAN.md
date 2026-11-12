@@ -2,7 +2,7 @@
 
 > Đây là bản tổng hợp/đề xuất, **không tự phê duyệt triển khai, nghiệm thu hay đóng gate**. Nguồn: trạng thái Git và code trong workspace, `doc/PENDING_DEPLOYMENT.md`, `doc/E2E_STAGING_EXECUTION_CHECKLIST.md`, `audit/PHASE1_REVIEW_2026-11-07.md`, `doc/HRA_PRD.md` và các plan Phase 2/UX/Langfuse. Các kết quả môi trường dưới đây là bằng chứng đã được ghi nhận trong phiên trước, không phải kiểm tra mới trong lần rà soát này.
 >
-> **Tiến triển sau ảnh chụp:** batch A đã bổ sung fence PROCESSING bền vững, recovery thủ công có xác nhận và migration `00014` trong repo; chi tiết và giới hạn tại `RETENTION_RECOVERY_RUNBOOK.md`, checklist song song tại `PHASE1_OPERATIONS_DECISION_CHECKLIST.md`. Các số test/diff trong mục 2.1 là snapshot trước batch này; xem `Update_Excute_P1.md` cho kết quả mới. Không coi các gate hay review vận hành là đã đóng.
+> **Tiến triển sau ảnh chụp:** batch A đã bổ sung fence PROCESSING bền vững, recovery thủ công có xác nhận và migration `00014` trong repo; CI xanh tại commit `cf9807d`; chi tiết và giới hạn tại `RETENTION_RECOVERY_RUNBOOK.md`. Người dùng đã xác nhận A1–A6 và cho biết HR/Privacy/Legal, DevOps đồng ý các hướng liên quan; phần B tạm treo để quay lại khi cần, phần C tiếp tục chờ. Xem [`PHASE1_PRODUCTION_DEFERRED_REPORT.md`](PHASE1_PRODUCTION_DEFERRED_REPORT.md). Các trạng thái/test/diff trong mục 2.1 và thứ tự ở mục 3 là snapshot/plan lịch sử trước batch này; không coi chúng mô tả worktree hiện tại hay các gate đã đóng.
 >
 > **Quy tắc thời gian:** ngày hệ thống phiên hiện tại là 05/11/2026, trong khi một số commit, CI và biên bản trong repository ghi ngày 07–11/11/2026. Giữ nguyên các bằng chứng theo đúng nhãn được ghi; cần người vận hành đối chiếu đồng hồ/mốc thời gian và xác nhận lại trước khi ký nghiệm thu hoặc dùng làm mốc phát hành. Không suy diễn kết quả chỉ dựa vào thứ tự ngày.
 
@@ -47,7 +47,7 @@ Theo checklist: E2E-14 OCR, E2E-15 BGE và E2E-16 recovery có điều kiện; c
 |---|---|---|
 | F1.01–04 | Tạo vị trí/JD, criteria, upload và profile có code; E2E-02–04 chưa PASS. | Khi E2E được mở lại: Admin/RBAC; dual approval và direct approval là hai luồng khác nhau; upload/profile/versioning và batch; quyết định có cần UI đổi HM sau tạo. OCR scan thực tế chưa được nghiệm thu. |
 | F1.05–06 | Rules v1.4, score một phần/coverage và E2E-05–07 đã được ghi PASS trong phạm vi synthetic; DM-01/DM-02 đã đóng theo bằng chứng trước. | HR/HM chốt policy và đánh giá chất lượng trên dữ liệu được phép, kiểm tra quote, false MATCH/NO_MATCH và repeatability. Smoke synthetic không phải gold set. |
-| F1.07 | Detector hiện dùng exact email/phone trong cùng vị trí; thay identity dismiss pending cũ và phát hiện lại ở ranking sau. E2E-08 chỉ chứng minh một `EMAIL_MATCH`. UI/API mới chỉ ở workspace. | Bổ sung kiểm thử identifier đổi/thiếu, phone, lặp run và signal cũ; đặc tả `doc/HRA_NextPhase.md` còn nêu trùng nội dung file nhưng code hiện tại chưa thấy detector tương ứng. Cần PO/HR chốt có phải bắt buộc cho Phase 1 hay chấp nhận giới hạn; chưa tự thêm cross-position/auto-merge. |
+| F1.07 | Detector dùng exact email/phone trong cùng vị trí; thay identity dismiss pending cũ và phát hiện lại ở ranking sau. E2E-08 chỉ chứng minh một `EMAIL_MATCH`; API/UI đọc tín hiệu đã có ở commit `cf9807d`. | Người dùng chọn A4 phương án 1: chấp nhận giới hạn email/SĐT cho phạm vi Phase 1, không yêu cầu detector trùng nội dung file; không thêm cross-position/auto-merge. Đây không tự xác nhận toàn bộ nghiệm thu detector. |
 | F1.08–10 | Trạng thái do HR quyết định; shortlist/feedback/revoke E2E-09 đã ghi PASS; audit/retention như DEP-02. | Đóng các lỗ hổng retention ở mục 3; xác nhận audit chính sách/ma trận quyền, không suy toàn bộ retention PASS từ E2E-09. |
 | F1.11–12 | Privacy egress còn chặn dữ liệu thật; giao diện VI/EN có test. | DEP-05; HR review thuật ngữ và nhãn UI trong ngữ cảnh, đặc biệt điểm một phần và UNCLEAR. |
 | Pilot quality | `doc/HRA_NextPhase.md` gọi pilot evaluation là **F1.13**, trong khi closure review dùng F1.13 cho dashboard/worker. PRD ghi mục tiêu khoảng 300 cặp, tối thiểu đề xuất 200, HR/HM xác nhận và phân xử. | Cần PO thống nhất mapping ID/nguồn yêu cầu; không bỏ sót pilot. `evaluate_matching.py` hiện chủ yếu đo repeatability, không tự chứng minh toàn bộ chất lượng extraction/matching/ranking. Thiết kế evaluation có mẫu/nhãn, nhóm IT, định nghĩa denominator, tránh leakage, phân xử, báo cáo từng nhóm; kiểm tra có đủ coverage công cụ trước khi chọn xây thêm. |
@@ -98,13 +98,10 @@ DEP-03/04/05 và DEP-08 theo chủ sở hữu; pilot quality theo bộ dữ li�
 | F2.03/04/05/06/09 | Analytics/override, QA sampling, duplicate cross-position, OCR ảnh, compare/export cần quyết định và plan riêng; không suy diễn metric hoặc mở rộng quyền từ code hiện tại. |
 | F2.07, SSO, rediscovery | Retention automation ngoài vòng này; SSO tạm treo; rediscovery theo quyết định phiên trước để cuối Phase 2, chờ consent/retention/quyền tái sử dụng. Không tự mở lại. |
 
-## 5. Quyết định đề nghị và điểm kiểm soát
+## 5. Quyết định đã ghi và điểm gọi lại
 
-1. **PO/người dùng:** duyệt thứ tự A → B (song song khi có owner); xác nhận E2E vẫn treo và có cho phép commit/push để chạy CI sau review hay không.
-2. **Kỹ thuật + DevOps:** chốt thiết kế recovery storage/DB và tiêu chuẩn CI/integration trước khi release retention; không chỉ dựa vào row lock.
-3. **HR/Privacy/Legal:** chốt cách xử lý feedback/note chung, phạm vi retention và dữ liệu đã purge trước guard; không tự động xóa nội dung người khác.
-4. **PO + HR/HM:** chốt file-content duplicate là yêu cầu Phase 1 hay giới hạn được chấp nhận; đối chiếu F1.13, policy điểm và bộ pilot.
-5. **DevOps/Security:** owner và lịch cho DEP-03/04/05/08; tuyệt đối không yêu cầu hay lưu secret trong chat/tài liệu.
-6. **HR/HM/IT:** chỉ mở Workflow Core khi duyệt plan và D-01…D-10; Langfuse cần quyết định môi trường/privacy riêng.
+- Người dùng đã đồng ý A1–A6, xác nhận HR/Privacy/Legal và DevOps đồng ý hướng xử lý liên quan; A4 chọn chỉ email/SĐT cùng vị trí cho Phase 1. Xem báo cáo tạm treo để phân biệt quyết định và bằng chứng triển khai.
+- Phần B tạm treo để quay lại khi cần: kiểm tra thực tế môi trường, key, backup/restore, privacy và bộ pilot chưa được coi là PASS. E2E tiếp tục dừng; Phase 2 phần C chờ.
+- Khi mở lại: đối chiếu mapping F1.13, quyết định riêng về release/migration và E2E, xác nhận owner/bằng chứng từng DEP. Giữ direct approval, không tự bật BGE/LTR, SSO, F2.07 hay rediscovery.
 
 Mọi trạng thái, commit, kết quả CI, quyết định phạm vi và bằng chứng thực tế phải được cập nhật trong `Update_Excute_P1.md`/`Update_Excute_P2.md` và checklist tương ứng khi phát sinh; không sửa lại các biên bản lịch sử để giả lập nghiệm thu.
