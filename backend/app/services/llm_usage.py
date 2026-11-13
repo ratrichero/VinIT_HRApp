@@ -1,4 +1,5 @@
 """Best-effort, privacy-minimized LLM attempt estimates, not provider invoices."""
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -44,7 +45,19 @@ def usage_estimate(runtime: dict, data: Any) -> dict:
             'estimated_cost_usd': cost}
 
 
-def record_attempt(runtime: dict, task_name: str, success: bool, data: Any = None) -> None:
+def safe_returned_model(data: Any, requested_model: Any) -> str | None:
+    """Never store arbitrary provider text in a model identifier field."""
+    value = data.get('model') if isinstance(data, dict) else None
+    if not isinstance(value, str) or not isinstance(requested_model, str) or not re.fullmatch(r'[A-Za-z0-9_.:@/+-]{1,200}', value):
+        return None
+    if value == requested_model or (value.startswith(requested_model + '-') and re.fullmatch(r'\d{4}-\d{2}-\d{2}', value[len(requested_model) + 1:])):
+        return value
+    return None
+
+
+def record_attempt(runtime: dict, task_name: str, success: bool, data: Any = None, *,
+                   duration_ms: int | None = None, http_status: int | None = None,
+                   failure_category: str | None = None) -> None:
     """Record one HTTP attempt; failures here must never alter LLM behavior.
 
     Timeouts and errors without usage are deliberately unknown, not free.
@@ -55,14 +68,19 @@ def record_attempt(runtime: dict, task_name: str, success: bool, data: Any = Non
         values = usage_estimate(runtime, data)
         values.update({'config_id': runtime.get('config_id'), 'provider': runtime.get('provider') or 'unknown',
                        'model_name': runtime.get('model_name') or 'unknown',
-                       'task_name': task_name[:200], 'http_success': success})
+                       'task_name': task_name[:200], 'http_success': success,
+                       'returned_model': safe_returned_model(data, runtime.get('model_name')),
+                       'duration_ms': duration_ms, 'http_status': http_status,
+                       'failure_category': failure_category})
         db = SessionLocal()
         db.execute(text("""
             INSERT INTO app_private.llm_usage_attempts
                 (config_id, provider, model_name, task_name, http_success, input_tokens, output_tokens,
-                 input_price_per_million_usd, output_price_per_million_usd, estimated_cost_usd)
+                 input_price_per_million_usd, output_price_per_million_usd, estimated_cost_usd,
+                 returned_model, duration_ms, http_status, failure_category)
             VALUES (:config_id, :provider, :model_name, :task_name, :http_success, :input_tokens, :output_tokens,
-                    :input_price_per_million_usd, :output_price_per_million_usd, :estimated_cost_usd)
+                    :input_price_per_million_usd, :output_price_per_million_usd, :estimated_cost_usd,
+                    :returned_model, :duration_ms, :http_status, :failure_category)
         """), values)
         db.commit()
     except Exception as exc:

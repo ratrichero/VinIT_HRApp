@@ -92,6 +92,7 @@ def observability_enabled() -> bool:
 def observability_configured() -> bool:
     return bool(
         observability_enabled()
+        and _resolved_host()
         and (getattr(settings, "LANGFUSE_PUBLIC_KEY", None) or "").strip()
         and (getattr(settings, "LANGFUSE_SECRET_KEY", None) or "").strip()
         and _sample_rate() > 0
@@ -353,14 +354,27 @@ def observation(
         yield Observation()
         return
 
-    observation_handle = Observation(client=client)
     try:
-        with context as span:
-            observation_handle = Observation(span=span, client=client)
-            yield observation_handle
+        active_span = context.__enter__()
     except Exception as exc:
+        logger.warning("Langfuse observation enter failed", error_type=type(exc).__name__)
+        yield Observation()
+        return
+    observation_handle = Observation(span=active_span, client=client)
+    try:
+        yield observation_handle
+    except BaseException as exc:
         observation_handle.update(level="ERROR", status_message=type(exc).__name__)
+        try:
+            context.__exit__(type(exc), exc, exc.__traceback__)
+        except Exception as exit_exc:
+            logger.warning("Langfuse observation exit failed", error_type=type(exit_exc).__name__)
         raise
+    else:
+        try:
+            context.__exit__(None, None, None)
+        except Exception as exc:
+            logger.warning("Langfuse observation exit failed", error_type=type(exc).__name__)
 
 
 @contextmanager

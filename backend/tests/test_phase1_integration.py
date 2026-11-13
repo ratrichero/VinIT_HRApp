@@ -2655,3 +2655,37 @@ def test_llm_prices_clone_pinning_and_estimated_usage(client, seed, monkeypatch)
     with engine.connect() as conn:
         row = conn.execute(text("SELECT estimated_cost_usd, input_price_per_million_usd, output_price_per_million_usd FROM app_private.llm_usage_attempts WHERE config_id=:id"), {'id': oid}).one()
         assert row == (Decimal('0.45'), Decimal('0.15'), Decimal('0.6'))
+
+
+def test_llm_operations_dashboard_aggregates_and_permissions(client, seed):
+    from decimal import Decimal
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE app_private.llm_usage_attempts"))
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {'id': seed['other']})
+        conn.execute(text("""
+            INSERT INTO app_private.llm_usage_attempts(provider, model_name, task_name, http_success,
+                 input_tokens, output_tokens, estimated_cost_usd, duration_ms, http_status, failure_category)
+            VALUES ('synthetic', 'test', 'synthetic', true, 100, 10, 0.5, 100, 200, NULL),
+                   ('synthetic', 'test', 'synthetic', false, NULL, NULL, NULL, 200, 503, 'HTTP_ERROR'),
+                   ('synthetic', 'test', 'synthetic', true, 10, 2, 0, NULL, 200, 'INVALID_JSON')
+        """))
+        conn.execute(text("""INSERT INTO app_private.llm_usage_attempts(created_at, provider, model_name, task_name, http_success)
+                           VALUES(now()-interval '100 days', 'synthetic', 'old', 'synthetic', true)"""))
+    path = '/v1/admin/ai/operations'
+    assert client.get(path, headers=headers(seed['hr'])).status_code == 403
+    admin = headers(seed['other'])
+    assert client.get(path + '?days=91', headers=admin).status_code == 422
+    assert client.get(path + '?limit=101', headers=admin).status_code == 422
+    response = client.get(path + '?days=30&limit=1&offset=0', headers=admin)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    summary = result['summary']
+    assert summary['attempts'] == 3 and summary['http_failed'] == 1
+    assert summary['priced_attempts'] == 2 and summary['unpriced_attempts'] == 1
+    assert Decimal(str(summary['estimated_usd'])) == Decimal('0.5')
+    assert summary['input_tokens'] == 110 and summary['latency_samples'] == 2
+    assert summary['errors_observed'] == 2 and len(result['events']) == 1
+    assert result['daily'][0]['attempts'] == 3 and result['models'][0]['attempts'] == 3
+    page2 = client.get(path + '?days=30&limit=1&offset=1', headers=admin).json()
+    assert page2['summary'] == summary and page2['events'][0]['attempt_id'] != result['events'][0]['attempt_id']
+    assert 'api_key' not in response.text and 'content' not in response.text

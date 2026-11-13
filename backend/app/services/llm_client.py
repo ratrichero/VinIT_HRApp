@@ -475,21 +475,28 @@ class LLMClient:
             input_data=payload["messages"],
         ) as generation:
             attempted = False
-            recorded = False
+            http_success = False
+            http_status = None
+            failure_category = None
+            data = None
+            started_at = None
+            duration_ms = None
             try:
                 # Environment proxy variables must not silently reroute CV text to
                 # a third party after the endpoint policy has checked a private host.
                 async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
                     attempted = True
+                    started_at = time.monotonic()
                     response = await client.post(
                         f"{base_url.rstrip('/')}/chat/completions",
                         json=payload,
                         headers=headers
                     )
+                    duration_ms = min(86400000, max(0, round((time.monotonic() - started_at) * 1000)))
+                    http_status = getattr(response, "status_code", None)
                     response.raise_for_status()
+                    http_success = True
                     data = response.json()
-                    recorded = True
-                    record_attempt(runtime, task_name, True, data)
                     usage_details = _usage_details(data)
                     if metadata_out is not None:
                         metadata_out.update({
@@ -505,25 +512,27 @@ class LLMClient:
                     generation.update(
                         output={**_parsed_output_summary(parsed), **observability.content_summary(parsed)},
                         usage_details=usage_details or None,
-                        metadata={
-                            "provider_returned_model": data.get("model"),
-                            "system_fingerprint": data.get("system_fingerprint"),
-                        },
                     )
                     return parsed
 
             except json.JSONDecodeError as e:
+                failure_category = "INVALID_JSON"
                 logger.error("LLM returned invalid JSON")
                 raise LLMError("Failed to parse LLM response as JSON")
             except httpx.HTTPStatusError as e:
+                failure_category = "HTTP_ERROR"
                 logger.error("LLM API error", status_code=e.response.status_code)
                 raise LLMError(f"LLM API error: {e.response.status_code}")
             except Exception as e:
+                failure_category = "NETWORK_ERROR" if isinstance(e, httpx.HTTPError) else "OTHER_ERROR"
                 logger.error("Unexpected error calling LLM", error_type=type(e).__name__)
                 raise LLMError("LLM call failed") from None
             finally:
-                if attempted and not recorded:
-                    record_attempt(runtime, task_name, False)
+                if attempted:
+                    if duration_ms is None and started_at is not None:
+                        duration_ms = min(86400000, max(0, round((time.monotonic() - started_at) * 1000)))
+                    record_attempt(runtime, task_name, http_success, data, duration_ms=duration_ms,
+                                   http_status=http_status, failure_category=failure_category)
 
     async def extract_criteria_from_jd(
         self,

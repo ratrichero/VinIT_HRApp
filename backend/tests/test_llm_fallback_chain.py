@@ -83,6 +83,7 @@ async def test_http_error_retries_primary_before_fallback_and_uses_only_own_key(
     class Reply:
         def __init__(self, url):
             self.request = httpx.Request("POST", url)
+            self.status_code = 503 if "11434" in url else 200
             self.response = httpx.Response(503, request=self.request)
         def raise_for_status(self):
             if "11434" in str(self.request.url):

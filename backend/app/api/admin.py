@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import text
 
@@ -266,6 +266,71 @@ async def get_llm_usage_summary(current_user: dict = Depends(require_admin_role)
             ORDER BY max(created_at) DESC LIMIT 50
         """)).mappings().all()
         return {**dict(row), "by_config": [dict(item) for item in grouped]}
+    finally:
+        db.close()
+
+
+@router.get("/ai/operations")
+async def llm_operations_dashboard(
+    days: int = Query(default=30, ge=1, le=90),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10000),
+    current_user: dict = Depends(require_admin_role),
+):
+    """Admin-only operational telemetry, not a billing or complete audit log."""
+    db = SessionLocal()
+    try:
+        db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
+        params = {"days": days, "limit": limit, "offset": offset}
+        summary = db.execute(text("""
+            SELECT count(*) AS attempts,
+                   count(*) FILTER (WHERE http_success) AS http_ok,
+                   count(*) FILTER (WHERE NOT http_success) AS http_failed,
+                   count(*) FILTER (WHERE failure_category IS NOT NULL) AS errors_observed,
+                   count(estimated_cost_usd) AS priced_attempts,
+                   count(*) FILTER (WHERE estimated_cost_usd IS NULL) AS unpriced_attempts,
+                   count(input_tokens) AS input_known_attempts, sum(input_tokens) AS input_tokens,
+                   count(output_tokens) AS output_known_attempts, sum(output_tokens) AS output_tokens,
+                   count(duration_ms) AS latency_samples, round(avg(duration_ms)) AS avg_latency_ms,
+                   percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms) AS p95_latency_ms,
+                   sum(estimated_cost_usd) AS estimated_usd
+            FROM app_private.llm_usage_attempts
+            WHERE created_at >= now() - make_interval(days => :days)
+        """), params).mappings().one()
+        daily = db.execute(text("""
+            SELECT (created_at AT TIME ZONE 'UTC')::date AS day, count(*) AS attempts,
+                   count(*) FILTER (WHERE NOT http_success) AS http_failed,
+                   count(*) FILTER (WHERE estimated_cost_usd IS NULL) AS unpriced_attempts,
+                   sum(estimated_cost_usd) AS estimated_usd
+            FROM app_private.llm_usage_attempts
+            WHERE created_at >= now() - make_interval(days => :days)
+            GROUP BY 1 ORDER BY 1
+        """), params).mappings().all()
+        models = db.execute(text("""
+            SELECT u.config_id, u.provider, u.model_name, u.returned_model,
+                   max(c.provider_name) AS provider_name, count(*) AS attempts,
+                   count(*) FILTER (WHERE NOT u.http_success) AS http_failed,
+                   count(*) FILTER (WHERE u.estimated_cost_usd IS NULL) AS unpriced_attempts,
+                   sum(u.estimated_cost_usd) AS estimated_usd
+            FROM app_private.llm_usage_attempts u
+            LEFT JOIN app_private.ai_configuration_versions c ON c.config_id = u.config_id
+            WHERE u.created_at >= now() - make_interval(days => :days)
+            GROUP BY u.config_id, u.provider, u.model_name, u.returned_model
+            ORDER BY count(*) DESC, u.model_name, u.returned_model NULLS LAST LIMIT 20
+        """), params).mappings().all()
+        events = db.execute(text("""
+            SELECT u.attempt_id, u.created_at, u.provider, u.model_name, u.returned_model,
+                   c.provider_name, u.task_name, u.http_success, u.http_status, u.failure_category,
+                   u.duration_ms, u.input_tokens, u.output_tokens, u.estimated_cost_usd,
+                   u.input_price_per_million_usd, u.output_price_per_million_usd
+            FROM app_private.llm_usage_attempts u
+            LEFT JOIN app_private.ai_configuration_versions c ON c.config_id = u.config_id
+            WHERE u.created_at >= now() - make_interval(days => :days)
+            ORDER BY u.created_at DESC, u.attempt_id DESC LIMIT :limit OFFSET :offset
+        """), params).mappings().all()
+        return {"days": days, "limit": limit, "offset": offset,
+                "summary": dict(summary), "daily": [dict(row) for row in daily],
+                "models": [dict(row) for row in models], "events": [dict(row) for row in events]}
     finally:
         db.close()
 

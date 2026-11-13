@@ -196,6 +196,7 @@ export const adminApi = {
     apiClient.post(`/admin/users/${id}/reset-password`, { new_password }),
   listAiConfigs: () => apiClient.get('/admin/ai/config'),
   getLlmUsageSummary: () => apiClient.get('/admin/ai/usage-summary'),
+  getLlmOperations: (params: { days: number; limit: number; offset: number }) => apiClient.get('/admin/ai/operations', { params }),
   testAiConnection: (data: any) => apiClient.post('/admin/ai/test-connection', data),
   createAiConfig: (data: any) => apiClient.post('/admin/ai/config', data),
   enableAiConfig: (id: string) => apiClient.post(`/admin/ai/config/${id}/enable`),

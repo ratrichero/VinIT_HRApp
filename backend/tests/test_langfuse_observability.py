@@ -213,3 +213,36 @@ def test_llm_output_summary_contains_counts_not_reasoning_or_quotes():
         "input": 10,
         "output": 5,
     }
+
+
+def test_langfuse_requires_explicit_destination(monkeypatch):
+    from app.core.config import settings
+    from app.services import langfuse_observability as obs
+    monkeypatch.setattr(settings, 'LANGFUSE_ENABLED', True)
+    monkeypatch.setattr(settings, 'LANGFUSE_PUBLIC_KEY', 'synthetic')
+    monkeypatch.setattr(settings, 'LANGFUSE_SECRET_KEY', 'synthetic')
+    monkeypatch.setattr(settings, 'LANGFUSE_BASE_URL', None)
+    monkeypatch.setattr(settings, 'LANGFUSE_HOST', None)
+    assert not obs.observability_configured()
+    assert obs._create_client() is None
+
+
+def test_langfuse_context_failures_never_change_business_result():
+    from app.services import langfuse_observability as obs
+    class Context:
+        def __init__(self, enter_fails=False): self.enter_fails = enter_fails
+        def __enter__(self):
+            if self.enter_fails: raise RuntimeError('enter')
+            return FakeSpan(None, {})
+        def __exit__(self, *args): raise RuntimeError('exit')
+    class Client:
+        def __init__(self, fail): self.fail = fail
+        def start_as_current_observation(self, **kwargs): return Context(self.fail)
+    for fail in (True, False):
+        obs.reset_observability_client(Client(fail))
+        with obs.generation('synthetic'):
+            result = 42
+        assert result == 42
+        with pytest.raises(ValueError, match='business'):
+            with obs.generation('synthetic'):
+                raise ValueError('business')

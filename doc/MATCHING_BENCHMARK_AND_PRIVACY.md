@@ -1,5 +1,7 @@
 # Kế hoạch benchmark matching và phê duyệt dữ liệu
 
+> Trạng thái: benchmark, xây dựng tập gold và phê duyệt vận hành **tạm treo chờ triển khai** theo chỉ đạo. Các điều kiện bên dưới vẫn bắt buộc trước khi tiếp tục; không coi là đã phê duyệt dữ liệu thật hay egress. LTR giữ OFF.
+
 Trạng thái: **đề xuất để HR/HM, Privacy/Legal và IT Security cùng chốt; chưa có tập gold, chưa phê duyệt CV thật và chưa có kết quả benchmark.** LTR giữ OFF. Các bước dùng dữ liệu thật chỉ bắt đầu sau phê duyệt đúng phạm vi. Không lưu CV/JD, khóa API, nhãn chứa PII hoặc dữ liệu nhạy cảm vào Git/chat.
 
 ## A. Tạo benchmark đáng tin cậy

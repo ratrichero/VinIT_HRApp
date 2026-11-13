@@ -1,5 +1,7 @@
 # Runbook triển khai và kiểm thử Langfuse staging
 
+> Trạng thái: tích hợp code chuẩn bị, mặc định OFF; chưa chọn/duyệt host, project, dữ liệu hoặc egress. Không bật hay chạy smoke gửi trace thật trước khi có phê duyệt riêng. Client yêu cầu `LANGFUSE_BASE_URL` hoặc `LANGFUSE_HOST` tường minh; không dùng mặc định cloud ngầm. Metadata, ID và hash vẫn có thể là dữ liệu cá nhân; lọc theo tên khóa không phải bảo đảm ẩn danh.
+
 > Tài liệu vận hành cho LF-2/LF-3. Tài liệu này **không** mở gate môi trường; chỉ khi DEP-01 có quyết định ký duyệt thì staging mới được phép bật Langfuse.
 
 ## 1. Gate bắt buộc trước khi chạy
