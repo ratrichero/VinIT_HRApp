@@ -366,7 +366,9 @@ def observation(
     except BaseException as exc:
         observation_handle.update(level="ERROR", status_message=type(exc).__name__)
         try:
-            context.__exit__(type(exc), exc, exc.__traceback__)
+            # The SDK records exception messages and stack traces on exit. They
+            # can contain CV/JD or credentials; export only the error type above.
+            context.__exit__(None, None, None)
         except Exception as exit_exc:
             logger.warning("Langfuse observation exit failed", error_type=type(exit_exc).__name__)
         raise

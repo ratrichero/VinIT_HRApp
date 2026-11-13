@@ -173,7 +173,7 @@ def test_fake_client_marks_generation_error_and_reraises():
 
     span = fake.contexts[0].span
     assert any(update.get("level") == "ERROR" for update in span.updates)
-    assert fake.contexts[0].exit_exc is ValueError
+    assert fake.contexts[0].exit_exc is None  # never export exception message or traceback
 
 
 def test_status_never_returns_keys_or_host(monkeypatch):
@@ -246,3 +246,98 @@ def test_langfuse_context_failures_never_change_business_result():
         with pytest.raises(ValueError, match='business'):
             with obs.generation('synthetic'):
                 raise ValueError('business')
+
+
+def test_model_output_and_usage_do_not_export_arbitrary_provider_text():
+    from app.services.llm_client import _parsed_output_summary, _safe_observability_usage
+    secret = 'Synthetic private CV content'
+    summary = _parsed_output_summary({
+        secret: 1, 'criteria': [{'category': secret}], 'findings': [{'outcome': secret}],
+    })
+    assert secret not in json.dumps(summary)
+    assert summary['criteria_category_counts'] == {'UNKNOWN': 1}
+    assert summary['finding_outcome_counts'] == {'UNKNOWN': 1}
+    usage = _safe_observability_usage({'usage': {'prompt_tokens': 5, 'completion_tokens': 2, secret: 10, 'total_tokens': -1}})
+    assert usage == {'input': 5, 'output': 2}
+
+
+def test_real_sdk_in_memory_traces_are_nested_and_do_not_capture_exception():
+    # No network: a private in-memory OpenTelemetry exporter replaces OTLP.
+    from langfuse import Langfuse
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from app.services import langfuse_observability as obs
+    exporter = InMemorySpanExporter()
+    client = Langfuse(public_key='pk-lf-offline-test', secret_key='sk-lf-offline-test',
+                      base_url='https://example.invalid', tracer_provider=TracerProvider(),
+                      span_exporter=exporter, flush_at=1)
+    obs.reset_observability_client(client)
+    secret = 'synthetic confidential CV and secret'
+    try:
+        with obs.span('hra.worker.operation', metadata={'operation_id': 'synthetic-op'}):
+            with pytest.raises(ValueError, match=secret):
+                with obs.generation('hra.llm.synthetic', model='synthetic-model', input_data=secret) as generation:
+                    generation.update(usage_details={'input': 4, 'output': 2})
+                    raise ValueError(secret)
+        # The worker executes async LLM code in a per-thread event loop.
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            async def child_work():
+                with obs.generation('hra.llm.async', model='synthetic-model'):
+                    return 1
+            with obs.span('hra.worker.async'):
+                assert loop.run_until_complete(child_work()) == 1
+        finally:
+            loop.close()
+        client.flush()
+        spans = {span.name: span for span in exporter.get_finished_spans()}
+        assert set(spans) == {'hra.worker.operation', 'hra.llm.synthetic', 'hra.worker.async', 'hra.llm.async'}
+        assert spans['hra.llm.async'].parent.span_id == spans['hra.worker.async'].context.span_id
+        parent = spans['hra.worker.operation']
+        child = spans['hra.llm.synthetic']
+        assert child.parent.span_id == parent.context.span_id
+        assert child.context.trace_id == parent.context.trace_id
+        assert child.attributes['langfuse.observation.type'] == 'generation'
+        assert child.attributes['langfuse.observation.model.name'] == 'synthetic-model'
+        assert secret not in str(child.attributes) and secret not in str(child.events) and secret not in str(child.status.description)
+        assert not any(event.name == 'exception' for event in child.events)
+    finally:
+        client.shutdown()
+        obs.reset_observability_client(None)
+
+
+@pytest.mark.asyncio
+async def test_invalid_llm_json_still_traces_safe_provider_usage(monkeypatch):
+    import httpx
+    from tenacity import wait_none
+    from app.core.config import settings
+    from app.services import langfuse_observability as obs
+    from app.services.ai_config import runtime_context
+    from app.services.llm_client import LLMClient, LLMError
+    import app.services.llm_client as llm
+    class HttpClient:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return False
+        async def post(self, url, **kwargs):
+            return httpx.Response(200, request=httpx.Request('POST', url), json={
+                'usage': {'prompt_tokens': 8, 'completion_tokens': 3, 'synthetic sensitive key': 10},
+                'choices': [{'message': {'content': 'not valid json'}}],
+            })
+    fake = FakeClient()
+    obs.reset_observability_client(fake)
+    monkeypatch.setattr(llm.httpx, 'AsyncClient', HttpClient)
+    monkeypatch.setattr(llm, 'record_attempt', lambda *args, **kwargs: None)
+    monkeypatch.setattr(LLMClient._call_llm_one.retry, 'wait', wait_none())
+    monkeypatch.setattr(settings, 'ALLOW_EXTERNAL_API', False)
+    token = runtime_context.set({'provider': 'compatible', 'model_name': 'synthetic', 'api_base': 'http://127.0.0.1:11434/v1', 'temperature_default': 0})
+    try:
+        with pytest.raises(LLMError): await LLMClient()._call_llm('system', 'synthetic')
+        assert len(fake.contexts) == 3
+        for ctx in fake.contexts:
+            assert {'usage_details': {'input': 8, 'output': 3}} in ctx.span.updates
+            assert 'synthetic sensitive key' not in str(ctx.span.updates)
+            assert any(update.get('level') == 'ERROR' for update in ctx.span.updates)
+    finally:
+        runtime_context.reset(token)

@@ -1,0 +1,3 @@
+Source: https://github.com/langfuse/skills
+Commit: f0bcb13088b490c04b3f4870bace17f6d57b199c
+Installed manually under the project Agent Skills directory.

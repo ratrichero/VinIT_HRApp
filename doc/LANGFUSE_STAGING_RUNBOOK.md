@@ -19,6 +19,14 @@ Nếu dùng Langfuse self-host: nó là hệ thống riêng gồm Langfuse web/w
 
 ## 2. Biến môi trường staging
 
+**Cảnh báo:** Nếu đã đặt `LANGFUSE_ENABLED=true` trong `.env`, sau khi API/worker
+nạp cấu hình và có tác vụ, trace có thể được gửi tự động, không chỉ khi chạy smoke.
+Giữ `LANGFUSE_ENABLED=false` ở cả API/worker cho đến khi đích Cloud và phạm vi
+metadata/egress được duyệt; không restart/deploy vào môi trường đang có dữ liệu
+thật chỉ để kiểm tra. Việc khai báo key không chứng minh các tiến trình đã nạp cấu
+hình, và endpoint health chỉ phản ánh tiến trình API phục vụ request.
+
+
 ```env
 LANGFUSE_ENABLED=true
 LANGFUSE_PUBLIC_KEY=<public-key-staging>
@@ -44,7 +52,7 @@ Trên backend staging, từ thư mục `backend`:
 python scripts/langfuse_smoke.py
 ```
 
-Kết quả mong đợi: `enabled=true`, `configured=true`, SDK `available=true`, environment `staging`, không lộ secret và hàm không báo lỗi.
+Kết quả mong đợi sau khi đã được duyệt bật: `enabled=true`, `configured=true`, `sdk_available=true`, environment `staging`, không lộ secret. Đây chỉ là trạng thái cấu hình của tiến trình script; không xác thực key, kết nối hay chứng minh API/worker đã nạp cùng cấu hình.
 
 Kiểm tra API health (cần tài khoản Admin):
 
@@ -125,3 +133,10 @@ Rollback ngay nếu có dữ liệu nhạy cảm trong Langfuse, hard failure do
 - [ ] Evaluation bridge đã đẩy score aggregate lên staging và đối chiếu được với report JSON.
 - [ ] Kiểm chứng fail-open và rollback đã thực hiện.
 - [ ] Kết quả, commit/release, dashboard/score names và bằng chứng được ghi vào `Update_Excute_P2.md`.
+
+
+## Đối chiếu skill Langfuse và kiểm thử offline
+
+Skill `langfuse` được cài trong `.agents/skills/langfuse`, pin theo `UPSTREAM.txt` (MIT). Code dùng SDK Python v4 (`langfuse>=4,<5`); không tự nâng major version chỉ vì skill đề xuất latest. SDK 4.18.0 đã được kiểm thử bằng exporter OpenTelemetry trong bộ nhớ, không gửi mạng. Một generation được tạo cho từng lần gọi/retry; usage an toàn được ghi ngay khi provider trả JSON, kể cả khi output JSON lỗi. Error chỉ ghi loại exception: wrapper không chuyển exception message/stack trace cho SDK. Tên keys và category/outcome do model trả về được giới hạn trước khi ghi summary.
+
+Đây không phải xác nhận Cloud đã nhận trace hay privacy review đầy đủ: metadata vẫn chứa ID/hash liên kết ứng viên và model/provider do admin cấu hình; auto-instrumentation không được bật để tránh gửi nội dung ngoài ý muốn. Giá tính trên Langfuse theo model và bảng giá riêng có thể khác với ước tính pin theo route trong HRApp. Không bật capture nội dung, reasoning hay upload CV/JD theo gợi ý chung của skill. E2E tổng thể, gold và benchmark vẫn tạm hoãn.

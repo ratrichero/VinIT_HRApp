@@ -48,6 +48,25 @@ def _usage_details(data: Dict[str, Any]) -> Dict[str, int]:
     return details
 
 
+def _safe_observability_usage(data: Any) -> Dict[str, int]:
+    """Allow only known numeric usage fields; provider keys are untrusted text."""
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(usage, dict):
+        return {}
+    result: Dict[str, int] = {}
+    for key, destination in (("prompt_tokens", "input"), ("input_tokens", "input"),
+                             ("completion_tokens", "output"), ("output_tokens", "output"),
+                             ("total_tokens", "total")):
+        value = usage.get(key)
+        if destination not in result and type(value) is int and 0 <= value <= 1_000_000_000:
+            result[destination] = value
+    return result
+
+
+def _safe_outcome(value: Any, allowed: frozenset[str]) -> str:
+    return value if isinstance(value, str) and value in allowed else "UNKNOWN"
+
+
 def normalize_profile_page_number(value: Any) -> Optional[int]:
     """Return a DB-safe page number from untrusted model output.
 
@@ -93,19 +112,21 @@ def _parsed_output_summary(parsed: Any) -> Dict[str, Any]:
         return {"result_type": type(parsed).__name__}
     summary: Dict[str, Any] = {
         "result_type": "object",
-        "top_level_keys": ",".join(sorted(str(key) for key in parsed.keys())[:30]),
+        "top_level_key_count": len(parsed),
     }
     criteria = parsed.get("criteria")
     if isinstance(criteria, list):
         summary["criteria_count"] = len(criteria)
         summary["criteria_category_counts"] = dict(Counter(
-            str(item.get("category") or "UNKNOWN") for item in criteria if isinstance(item, dict)
+            _safe_outcome(item.get("category"), frozenset({"MUST_HAVE", "NICE_TO_HAVE"}))
+            for item in criteria if isinstance(item, dict)
         ))
     findings = parsed.get("findings")
     if isinstance(findings, list):
         summary["findings_count"] = len(findings)
         summary["finding_outcome_counts"] = dict(Counter(
-            str(item.get("outcome") or "UNKNOWN") for item in findings if isinstance(item, dict)
+            _safe_outcome(item.get("outcome"), frozenset({"STRONG_MATCH", "MATCH", "NO_MATCH", "UNCLEAR"}))
+            for item in findings if isinstance(item, dict)
         ))
         summary["findings_requiring_verification"] = sum(
             1 for item in findings if isinstance(item, dict) and item.get("requires_verification")
@@ -498,6 +519,9 @@ class LLMClient:
                     http_success = True
                     data = response.json()
                     usage_details = _usage_details(data)
+                    # Usage belongs to the HTTP attempt even if the generated JSON
+                    # is invalid; never export arbitrary provider-supplied keys.
+                    generation.update(usage_details=_safe_observability_usage(data) or None)
                     if metadata_out is not None:
                         metadata_out.update({
                             "provider_returned_model": data.get("model"),
@@ -511,7 +535,6 @@ class LLMClient:
                     parsed = json.loads(content)
                     generation.update(
                         output={**_parsed_output_summary(parsed), **observability.content_summary(parsed)},
-                        usage_details=usage_details or None,
                     )
                     return parsed
 
