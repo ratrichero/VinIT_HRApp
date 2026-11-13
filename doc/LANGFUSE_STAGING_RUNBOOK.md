@@ -27,7 +27,7 @@ LANGFUSE_SECRET_KEY=<secret-key-staging>
 LANGFUSE_BASE_URL=https://<langfuse-staging-host>
 LANGFUSE_ENVIRONMENT=staging
 LANGFUSE_RELEASE=<commit-sha>
-LANGFUSE_TRACE_SAMPLE_RATE=1.0
+LANGFUSE_SAMPLE_RATE=1.0
 LANGFUSE_CAPTURE_CONTENT=false
 ```
 
@@ -66,22 +66,22 @@ Sau đó kiểm tra trên Langfuse staging UI:
 
 - Tìm trace `hra.langfuse.smoke`.
 - `environment` là `staging`.
-- Metadata chỉ có `synthetic=true`, `check=ok_count`, `release`.
-- Observation `hra.smoke.echo` chỉ có `input_characters` và `output_characters` dạng count; không có nội dung nhạy cảm giả lập.
-- Score `smoke_check_passed=1` xuất hiện.
+- Metadata smoke có `synthetic=true`, `smoke_test=true`.
+- Observation `hra.langfuse.smoke` có input summary (hash/độ dài khi capture tắt) và output trạng thái tổng hợp; không có nội dung nhạy cảm.
+- Score boolean `smoke_test=true` xuất hiện. Script fail-open và dòng báo gửi không chứng minh Langfuse đã nhận; phải kiểm tra UI.
 
 ## 5. Kiểm tra workflow tổng hợp một vòng
 
 1. Tạo một vị trí và đơn ứng tuyển dùng CV/JD tổng hợp.
 2. Chạy đường CV batch hoặc API hoàn chỉnh tùy theo deployment staging đã phê duyệt.
 3. Kiểm tra Langfuse có các observation chính theo thứ tự:
-   - `hra.cv.operation.process`
+   - `hra.worker.operation`
    - `hra.cv.document_extraction`
-   - `hra.assessment.run`
+   - `hra.assessment`
    - các generation `hra.llm.*`
    - `hra.assessment.deterministic_matching`
    - `hra.assessment.semantic_retrieval` khi có tiêu chí chưa quyết định được bằng luật
-   - `hra.embedding.generate` khi semantic fallback gọi BGE
+   - `hra.embedding.bge` khi semantic fallback gọi BGE
    - `hra.assessment.evidence_verification`
    - `hra.assessment.scoring`
    - `hra.ranking.generate`
@@ -106,7 +106,7 @@ Kiểm tra Langfuse có trace `hra.evaluation.repeatability`, scores `repeatabil
 
 1. Tạm thời dùng Langfuse host không tới được trong môi trường kiểm thử có kiểm soát.
 2. Chạy lại flow tổng hợp: nghiệp vụ không được fail vì Langfuse.
-3. Đối chiếu application log và latency; nếu timeout/latency vượt ngân sách của staging, tắt sampling hoặc giảm `LANGFUSE_TRACE_SAMPLE_RATE` trước, sau đó tắt hẳn nếu cần.
+3. Đối chiếu application log và latency; nếu timeout/latency vượt ngân sách của staging, tắt sampling hoặc giảm `LANGFUSE_SAMPLE_RATE` trước, sau đó tắt hẳn nếu cần.
 
 ## 8. Rollback
 
