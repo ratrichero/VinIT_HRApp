@@ -1,0 +1,30 @@
+# Kế hoạch benchmark matching và phê duyệt dữ liệu
+
+Trạng thái: **đề xuất để HR/HM, Privacy/Legal và IT Security cùng chốt; chưa có tập gold, chưa phê duyệt CV thật và chưa có kết quả benchmark.** LTR giữ OFF. Các bước dùng dữ liệu thật chỉ bắt đầu sau phê duyệt đúng phạm vi. Không lưu CV/JD, khóa API, nhãn chứa PII hoặc dữ liệu nhạy cảm vào Git/chat.
+
+## A. Tạo benchmark đáng tin cậy
+
+1. **Chốt phạm vi và người chịu trách nhiệm.** PO/HR Lead chỉ định owner, hai reviewer độc lập (HR và HM) và một người phân xử; IT/Privacy chọn môi trường, người được cấp quyền và nguồn dữ liệu được phép. Mục tiêu PRD là khoảng **300 cặp CV–JD–rubric**, tối thiểu đề xuất 200, từ nhiều vị trí IT và mức độ phù hợp; đây là mục tiêu triển khai chứ không bảo đảm đủ power thống kê cho mọi nhóm. Tài liệu trước có gợi ý 50–100 CV cho golden set riêng; không nhầm số CV với số cặp. Báo rõ số vị trí, số ứng viên duy nhất, số cặp, số tiêu chí và mức thiếu dữ liệu.
+2. **Khóa bộ dữ liệu và chống rò rỉ.** Cố định version JD, rubric đã duyệt, profile/CV, policy, model, prompt, retrieval và evaluation date. Dùng mã giả ngẫu nhiên, lưu bảng nối danh tính và tài liệu gốc ở kho được phê duyệt, phân quyền riêng; mã giả/embedding vẫn có thể là dữ liệu cá nhân. Tách calibration và holdout theo vị trí; không để cùng ứng viên, CV trùng hoặc bản sửa gần giống xuất hiện ở cả hai tập. Nếu khả thi thêm holdout theo thời gian. Không điều chỉnh tham số theo holdout sau khi xem kết quả.
+3. **Gán nhãn blind.** Hai reviewer độc lập xem yêu cầu và bằng chứng CV được phép, không thấy điểm/thứ tự AI. Với mỗi tiêu chí gán `STRONG_MATCH`, `MATCH`, `UNCLEAR` hoặc `NO_MATCH`, đánh dấu mandatory, vị trí bằng chứng/quote hoặc lý do không đủ chứng cứ. Định nghĩa trước `UNCLEAR` khác `NO_MATCH`, điều kiện đạt và cách xử lý thiếu bằng chứng. Ghi tỷ lệ bất đồng; phân xử độc lập trước khi khóa gold. Xếp hạng relevance theo từng vị trí nếu đo NDCG. Giữ provenance, nhãn và rubric có version; access/audit không chứa quote/PII.
+4. **Chốt metric, denominator và ngưỡng trước khi chạy.** Mục tiêu khởi điểm từ PRD (cần HR/HM/PO phê duyệt): extraction F1 ≥0,85 từng nhóm trường; matching macro-F1 ≥0,80 trên bốn nhãn; mandatory false negative `gold đạt` nhưng AI `NO_MATCH` ≤5% trên **số tiêu chí mandatory gold đạt**; NDCG@5 ≥0,75 theo từng vị trí có relevance gold. Báo riêng `UNCLEAR`, false MATCH, confusion matrix, tỷ lệ quote hợp lệ và coverage. Nêu mẫu số, khoảng bất định và nhóm không đủ mẫu; không hạ ngưỡng sau khi xem kết quả.
+5. **So sánh reranker OFF/ON công bằng.** Giữ cùng cặp, cùng danh sách tối đa năm chunks được truy xuất, model LLM/prompt, cấu hình, phiên bản và policy; thay duy nhất reranker. Thực hiện trên môi trường đã phê duyệt, không thay dữ liệu vận hành; ghim snapshots, ghi số request lỗi/fallback và latency/cost. Reranker chỉ đổi thứ tự cùng tập chunks, nên Recall@5 của chính tập đó không thay đổi; đo **MRR, NDCG và evidence Recall@1/3** cho thứ tự, rồi đo cả matching và mandatory false negatives đầu-cuối. Cấu hình LLM có thể không deterministic: đo lặp hợp lý, báo biến thiên và mọi mandatory flip. Không dùng cùng holdout để tune. BGE embedding và reranker là hai thành phần khác nhau; so sánh riêng nếu thay BGE.
+6. **Review/go-no-go.** HR/HM xem lỗi có rủi ro cao, đặc biệt mandatory false negatives, quote sai và outcome flip; QA/Security xem fallback, p50/p95 latency, chi phí, lỗi và dữ liệu bị gửi ra ngoài. Báo kết quả theo họ vị trí, tiêu chí và nhóm được phép đánh giá với số lượng đủ; không tự suy thuộc tính nhạy cảm từ CV. Chốt ngưỡng không suy giảm và kế hoạch theo dõi/rollback. Kết quả synthetic chỉ kiểm tra plumbing, không chứng minh tính công bằng hay chất lượng tuyển dụng.
+
+Công cụ `backend/scripts/offline_matching_eval.py` và `evaluate_matching.py` là điểm khởi đầu; cần đối chiếu manifest/contract đang hỗ trợ và bổ sung harness so sánh reranker + đánh giá gold nếu còn thiếu. Không xem trạng thái ứng tuyển hay nhãn yếu từ LTR exporter là HR gold.
+
+## B. Phê duyệt privacy và vận hành trước CV thật
+
+Tạo một **phiếu phê duyệt theo phạm vi** do các bên dưới ký/ghi nhận trong hệ thống tài liệu nội bộ; không coi checkbox UI là thay thế phê duyệt pháp lý.
+
+| Nội dung cần chốt | Bên chịu trách nhiệm | Bằng chứng tối thiểu |
+|---|---|---|
+| Mục đích, loại CV/JD/tiêu chí, nguồn và cơ sở xử lý hợp lệ, thời hạn, người được truy cập | HR Lead + Privacy/Legal | Mục đích đánh giá hỗ trợ người tuyển; đối tượng, quyền, nguồn và cơ chế xử lý yêu cầu/xóa |
+| Nhà cung cấp và luồng dữ liệu | IT Security + Privacy/Legal | Inventory **LLM chính, từng fallback, BGE embedding, Cloudflare reranker**, lưu trữ, logs, metrics; chính xác môi trường/account/model/endpoint và bên xử lý phụ |
+| Chuyển dữ liệu, vùng, retention/logging, training, xóa, DPA/điều khoản | Legal/Privacy + chủ hợp đồng | Điều khoản áp dụng cho account/sản phẩm/gateway đang dùng, vị trí xử lý và ngoại lệ; không suy zero retention từ tên model hay một trang công khai |
+| Tối thiểu hóa và access | Security + DevOps | Redaction best-effort, dữ liệu gửi theo tiêu chí/chunk, ai có quyền, mã hóa và quản lý secrets; redaction không bảo đảm ẩn danh và vector/ID có thể nhạy cảm |
+| Network, quota, monitoring và sự cố | DevOps + Security | `ALLOW_EXTERNAL_API`, firewall, allowlist thực tế, quota/chi phí, timeouts, lỗi/fallback, alert, quy trình dừng và ứng phó; tắt reranker không hủy request đã gửi |
+| Pilot/release và rollback | PO/HR Lead + DevOps | Cohort/phạm vi thử, giới hạn thời gian và quota, acceptance gates, người giám sát, cách tắt bằng UI/drain worker, thời điểm đánh giá lại |
+| Retention/khôi phục | Privacy + DevOps/DBA | Chính sách dữ liệu/backup, lịch xóa và khả năng restore; bảng thống kê LLM hiện chưa có lịch purge tự động |
+
+Quyết định nên ghi rõ **APPROVED/REJECTED**, owner, ngày, môi trường, nhà cung cấp/model, loại dữ liệu, mục đích, thời hạn, giới hạn và điều kiện thu hồi. Chỉ sau đó Admin mới chọn và xác nhận destination tương ứng trên UI. Quyền gửi dữ liệu LLM chính không tự mở quyền gửi đến fallback, BGE hoặc reranker. Không ghi account ID/token/CV trong phiếu chia sẻ rộng.
