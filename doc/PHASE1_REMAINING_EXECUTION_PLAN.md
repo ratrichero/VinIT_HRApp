@@ -45,7 +45,7 @@ Theo checklist: E2E-14 OCR, E2E-15 BGE và E2E-16 recovery có điều kiện; c
 
 | Phạm vi | Đã có / chưa có | Công việc còn lại |
 |---|---|---|
-| F1.01–04 | Tạo vị trí/JD, criteria, upload và profile có code; E2E-02–04 chưa PASS. | Khi E2E được mở lại: Admin/RBAC; dual approval và direct approval là hai luồng khác nhau; upload/profile/versioning và batch; quyết định có cần UI đổi HM sau tạo. OCR scan thực tế chưa được nghiệm thu. |
+| F1.01–04 | Tạo vị trí/JD, criteria, upload và profile có code; E2E-02–04 chưa PASS. | Khi E2E được mở lại: Admin/RBAC; dual approval và direct approval là hai luồng khác nhau; upload/profile/versioning và batch; kiểm thử UI đổi HM sau tạo ở môi trường được duyệt. OCR scan thực tế chưa được nghiệm thu. |
 | F1.05–06 | Rules v1.4, score một phần/coverage và E2E-05–07 đã được ghi PASS trong phạm vi synthetic; DM-01/DM-02 đã đóng theo bằng chứng trước. | HR/HM chốt policy và đánh giá chất lượng trên dữ liệu được phép, kiểm tra quote, false MATCH/NO_MATCH và repeatability. Smoke synthetic không phải gold set. |
 | F1.07 | Detector dùng exact email/phone trong cùng vị trí; thay identity dismiss pending cũ và phát hiện lại ở ranking sau. E2E-08 chỉ chứng minh một `EMAIL_MATCH`; API/UI đọc tín hiệu đã có ở commit `cf9807d`. | Người dùng chọn A4 phương án 1: chấp nhận giới hạn email/SĐT cho phạm vi Phase 1, không yêu cầu detector trùng nội dung file; không thêm cross-position/auto-merge. Đây không tự xác nhận toàn bộ nghiệm thu detector. |
 | F1.08–10 | Trạng thái do HR quyết định; shortlist/feedback/revoke E2E-09 đã ghi PASS; audit/retention như DEP-02. | Đóng các lỗ hổng retention ở mục 3; xác nhận audit chính sách/ma trận quyền, không suy toàn bộ retention PASS từ E2E-09. |
@@ -95,7 +95,7 @@ PRD nêu **mục tiêu khởi điểm**, cần chốt trước khi đo: extracti
 
 ### D. Sau điều kiện dữ liệu và vận hành
 
-DEP-03/04/05 và DEP-08 theo chủ sở hữu; pilot quality theo bộ dữ liệu HR/HM đã duyệt. DEP-06 BGE sau endpoint/golden set/phê duyệt; DEP-07 LTR sau dataset/artifact/SHADOW. Các gate có thể chuẩn bị song song nhưng việc bật production chỉ sau điều kiện tương ứng; không thay semantic/LTR OFF vì có code hay smoke.
+DEP-03/04/05 và DEP-08 theo chủ sở hữu; pilot quality theo bộ dữ liệu HR/HM đã duyệt. DEP-06 BGE sau endpoint/golden set/phê duyệt; DEP-07 LTR sau dataset/artifact/SHADOW. Các gate có thể chuẩn bị song song nhưng việc bật production chỉ sau điều kiện tương ứng; không suy đạt gate hoặc tự đổi cấu hình runtime vì có code hay smoke; lần đối chiếu trước ghi BGE control ON trên project test, LTR OFF.
 
 ## 4. Các hạng mục thảo luận dở ngoài Phase 1
 
@@ -103,7 +103,7 @@ DEP-03/04/05 và DEP-08 theo chủ sở hữu; pilot quality theo bộ dữ li�
 |---|---|
 | F2.01/F2.02 Workflow Core | Plan đã lập nhưng **chưa duyệt**, D-01…D-10 chưa chốt. HR/HM/IT chốt taxonomy, ownership, level, scorecard, deadline/reminder và quyền trước schema/code. Số `00013` trong plan cũ đã được dùng cho direct approval; kiểm tra local/remote và chọn số tiếp theo khi bắt đầu. D-04 cần sửa để phản ánh cả direct approval đã được xác nhận, không vô tình xóa ngoại lệ hiện có. |
 | UX-0…4 | Đã có code và CI cũ; usability HR/HM chưa được nghiệm thu. UX-5: global search, PDF highlight, pagination, retry từng file cần contract riêng; không dựng overall confidence chưa định nghĩa. |
-| Langfuse | LF-1/LF-2A/LF-3A đã có code, mặc định tắt; staging/trace thật và evaluation dataset còn chờ. Chọn Cloud/self-host, mapping, retention, RBAC và privacy/egress; mặc định metadata-first, không gửi CV/JD/prompt. DEP-01 scoped không tự duyệt hạ tầng Langfuse. |
+| Langfuse | LF-1/LF-2A/LF-3A đã có code, mặc định tắt; đã ghi nhận smoke synthetic Cloud theo ảnh người vận hành, còn chờ kiểm chứng workflow thực và evaluation dataset. Chọn Cloud/self-host, mapping, retention, RBAC và privacy/egress; mặc định metadata-first, không gửi CV/JD/prompt. DEP-01 scoped không tự duyệt hạ tầng Langfuse. |
 | F2.03/04/05/06/09 | Analytics/override, QA sampling, duplicate cross-position, OCR ảnh, compare/export cần quyết định và plan riêng; không suy diễn metric hoặc mở rộng quyền từ code hiện tại. |
 | F2.07, SSO, rediscovery | Retention automation ngoài vòng này; SSO tạm treo; rediscovery theo quyết định phiên trước để cuối Phase 2, chờ consent/retention/quyền tái sử dụng. Không tự mở lại. |
 
@@ -111,7 +111,7 @@ DEP-03/04/05 và DEP-08 theo chủ sở hữu; pilot quality theo bộ dữ li�
 
 - Người dùng đã đồng ý A1–A6, xác nhận HR/Privacy/Legal và DevOps đồng ý hướng xử lý liên quan; A4 chọn chỉ email/SĐT cùng vị trí cho Phase 1. Xem báo cáo tạm treo để phân biệt quyết định và bằng chứng triển khai.
 - Phần B tạm treo để quay lại khi cần: kiểm tra thực tế môi trường, key, backup/restore, privacy và bộ pilot chưa được coi là PASS. E2E tiếp tục dừng; Phase 2 phần C chờ.
-- Khi mở lại: đối chiếu mapping F1.13, quyết định riêng về release/migration và E2E, xác nhận owner/bằng chứng từng DEP. Giữ direct approval, không tự bật BGE/LTR, SSO, F2.07 hay rediscovery.
+- Khi mở lại: dùng mapping F1.13 đã thống nhất, quyết định riêng về release/migration và E2E, xác nhận owner/bằng chứng từng DEP. Giữ direct approval, không tự bật BGE/LTR, SSO, F2.07 hay rediscovery.
 
 Mọi trạng thái, commit, kết quả CI, quyết định phạm vi và bằng chứng thực tế phải được cập nhật trong `Update_Excute_P1.md`/`Update_Excute_P2.md` và checklist tương ứng khi phát sinh; không sửa lại các biên bản lịch sử để giả lập nghiệm thu.
 

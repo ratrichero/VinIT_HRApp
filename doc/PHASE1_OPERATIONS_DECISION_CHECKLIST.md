@@ -8,7 +8,7 @@
 |---|---|---|
 | Inventory môi trường, phân loại test/production, URL và project ref | DevOps/Release | CHỜ — xác nhận mapping và mốc giờ, không suy từ tên `APP_ENV` |
 | Backend, frontend, worker: host, process, phiên bản/commit, số instance, ai bật worker | DevOps | CHỜ — đối chiếu lúc release; xác minh session PostgreSQL cho advisory lock |
-| Migration và rollback: phiên bản thực tế; thử migration trên DB dùng một lần | DevOps/DBA | CHỜ — `00014` mới chỉ ở repo/local CI; không tự áp project kết nối. Rà backfill/lịch sử và release tương thích; backup trước thay đổi |
+| Migration và rollback: phiên bản thực tế; thử migration trên DB dùng một lần | DevOps/DBA | CHỜ — lần đối chiếu trước ghi project test đến `00022`, gồm `00014`; chưa xác minh lại runtime/môi trường đích. Rà backfill/lịch sử, release tương thích, backup và rollback trước thay đổi |
 | Supabase API key/JWT consumers: backend, worker, deploy, tác vụ định kỳ, integration, client khác | IT Security + chủ project | CHỜ — ghi từng consumer/version, loại key, chuyển sang key/JWKS mới, restart và test; không ghi giá trị key |
 | Disable legacy key/revoke JWT secret | Chủ project | BLOCKED — chỉ thao tác thủ công sau khi mọi consumer đã kiểm chứng và có phương án rollback; không tự disable |
 | Backup DB và storage, retention backup, mã hóa, phân quyền và restore | DevOps/DBA | CHỜ — lịch, owner, RPO/RTO được phê duyệt, bằng chứng restore isolated; test phải được cấp phép |

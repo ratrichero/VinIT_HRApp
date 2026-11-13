@@ -4,7 +4,7 @@ Các integration test tạo dữ liệu giả và chạy trên PostgreSQL thật
 
 ## Chuẩn bị database cục bộ rỗng
 
-Ví dụ dưới đây giả định **một cụm PostgreSQL riêng, dùng một lần** đã chạy tại `127.0.0.1:55432`, có user quản trị `postgres`, các extension `uuid-ossp` và `pgcrypto`, và bộ công cụ `psql`/`createdb`. Không chạy phần tạo role trên cụm dùng chung. Schema `auth` dưới đây chỉ là stub cho test, không phải Supabase Auth thật.
+Ví dụ dưới đây giả định **một cụm PostgreSQL riêng, dùng một lần** đã chạy tại `127.0.0.1:55432`, có user quản trị `postgres`, các extension `uuid-ossp`, `pgcrypto` và `vector` (pgvector) sẵn có, và bộ công cụ `psql`/`createdb`. Không chạy phần tạo role trên cụm dùng chung. Schema `auth` dưới đây chỉ là stub cho test, không phải Supabase Auth thật.
 
 ```bash
 psql 'postgresql://postgres@127.0.0.1:55432/postgres' -v ON_ERROR_STOP=1 <<'SQL'
@@ -38,7 +38,8 @@ for f in supabase/migrations/00001_initial_schema.sql \
          supabase/migrations/00018_ltr_managed_shadow.sql \
          supabase/migrations/00019_ai_runtime_controls.sql \
          supabase/migrations/00020_reranker_controls.sql \
-         supabase/migrations/00021_llm_prices_and_usage.sql; do
+         supabase/migrations/00021_llm_prices_and_usage.sql \
+         supabase/migrations/00022_llm_operations_observability.sql; do
   psql 'postgresql://postgres@127.0.0.1:55432/hra_phase1_test' -v ON_ERROR_STOP=1 -f "$f"
 done
 ```

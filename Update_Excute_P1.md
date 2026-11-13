@@ -433,3 +433,7 @@ Sau mỗi batch, dev thực hiện phải bổ sung:
 - A5 giữ Python tối thiểu 4 năm; `partial_backend` có 2 năm là `UNCLEAR`, HR xác minh; không sửa manifest. A6 tiếp tục treo E2E. Phase 2 phần C tiếp tục chờ.
 - Người dùng yêu cầu khoanh vùng, ghi báo cáo các việc phần B để quay lại khi cần: `doc/PHASE1_PRODUCTION_DEFERRED_REPORT.md`; checklist chi tiết ở `doc/PHASE1_OPERATIONS_DECISION_CHECKLIST.md`. Topology/key/backup, privacy chi tiết, pilot và các bằng chứng còn thiếu chưa được xác minh hay đóng DEP; điều kiện áp dụng cho môi trường liên quan vẫn giữ nguyên.
 - Không deploy, áp migration, thay key, chạy E2E hay thay dữ liệu VPS/Supabase theo quyết định này. DEP-01 vẫn `CLOSED_SCOPED`, DEP-02 vẫn partial; BGE/LTR production, SSO, retention automation và rediscovery tiếp tục giữ gate đã nêu.
+
+### Audit trước khi xem xét Phase 2 — vòng repository
+
+Xem `audit/PHASE1_AUDIT_BEFORE_PHASE2.md` (code audit `d30b681`): 322 backend tests pass trên PostgreSQL cục bộ dùng một lần; CI run `43368406759` pass 3 jobs. Phát hiện đáng chú ý: signed URL CV 600 giây không có thu hồi trong code sau revoke/đổi HM (chưa thử provider thật); API cấp link/đọc CV không ghi audit event ứng dụng trong probe mock. Đã chỉnh stale status trong tài liệu B và thêm migration 00022 vào hướng dẫn DB test. Các gate, E2E, pilot/gold, B7 và Phase 2 vẫn tạm dừng; không deploy hay tác động môi trường thật. Ngày hệ thống phiên khác đồng hồ sandbox/CI, cần Release owner đối chiếu trước ký.
