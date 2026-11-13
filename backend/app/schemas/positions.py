@@ -51,6 +51,11 @@ class PositionUpdate(BaseSchema):
     work_mode: Optional[str] = None
 
 
+class HiringManagerChange(BaseModel):
+    hiring_manager_user_id: UUID
+    expected_assignments: List[str] = Field(max_length=100)
+
+
 class Position(PositionBase, TimestampMixin):
     position_id: UUID
     department_id: Optional[UUID] = None

@@ -2689,3 +2689,115 @@ def test_llm_operations_dashboard_aggregates_and_permissions(client, seed):
     page2 = client.get(path + '?days=30&limit=1&offset=1', headers=admin).json()
     assert page2['summary'] == summary and page2['events'][0]['attempt_id'] != result['events'][0]['attempt_id']
     assert 'api_key' not in response.text and 'content' not in response.text
+
+
+def test_change_hiring_manager_permissions_and_share_history(client, seed):
+    new_hm = uid()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO auth.users(id) VALUES (:id)"), {'id': new_hm})
+        conn.execute(text("INSERT INTO app_private.user_profiles(user_id,display_name) VALUES (:id,'NEW HM')"), {'id': new_hm})
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'HIRING_MANAGER')"), {'id': new_hm})
+        conn.execute(text("UPDATE app_private.applications SET application_status='SHORTLIST' WHERE application_id=:id"), {'id': seed['app']})
+    base = f"/v1/positions/{seed['pos']}"
+    initial = client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()
+    payload = {'hiring_manager_user_id': new_hm, 'expected_assignments': [row['version'] for row in initial]}
+    assert client.get(base+'/hiring-managers', headers=headers(seed['hm'])).status_code == 403
+    assert client.put(base+'/hiring-manager', headers=headers(seed['other']), json=payload).status_code == 403
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr2']), json=payload).status_code == 403
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hm']), json=payload).status_code == 403
+    share = client.post('/v1/shortlist/share', headers=headers(seed['hr']), json={
+        'position_id': seed['pos'], 'shared_with_user_id': seed['hm'], 'application_ids': [seed['app']], 'allow_cv_view': False,
+    }).json()['share_id']
+    assert client.post(f'/v1/shortlist/{share}/feedback', headers=headers(seed['hm']), json={'content': 'synthetic'}).status_code == 201
+    assert client.get(f'/v1/shortlist/{share}', headers=headers(seed['hm'])).status_code == 200
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json={**payload, 'expected_assignments': []}).status_code == 409
+    response = client.put(base+'/hiring-manager', headers=headers(seed['hr']), json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()['changed'] and response.json()['revoked_shares'] == 1
+    assert client.get(base, headers=headers(seed['hm'])).status_code == 403
+    assert client.get(base, headers=headers(new_hm)).status_code == 200
+    assert client.get(f'/v1/shortlist/{share}', headers=headers(seed['hm'])).status_code == 403
+    assert client.get(f'/v1/shortlist/{share}', headers=headers(new_hm)).status_code == 403
+    assert client.get(f"/v1/applications/{seed['app']}", headers=headers(new_hm)).status_code == 403
+    hr_detail = client.get(f'/v1/shortlist/{share}', headers=headers(seed['hr']))
+    assert hr_detail.status_code == 200 and hr_detail.json()['feedback'][0]['content'] == 'synthetic'
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json=payload).status_code == 409
+    now = client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()
+    back = client.put(base+'/hiring-manager', headers=headers(seed['hr']), json={
+        'hiring_manager_user_id': seed['hm'], 'expected_assignments': [row['version'] for row in now]})
+    assert back.status_code == 200, back.text
+    assert client.get(f'/v1/shortlist/{share}', headers=headers(seed['hm'])).status_code == 403
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT status FROM app_private.shortlist_shares WHERE share_id=:id"), {'id': share}).scalar_one() == 'REVOKED'
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='CHANGE_HIRING_MANAGER' AND position_id=:id"), {'id': seed['pos']}).scalar_one() == 2
+        assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='REVOKE_SHORTLIST' AND object_id=:id"), {'id': share}).scalar_one() == 1
+
+
+@pytest.mark.parametrize('role', ['ADMIN', 'HR_LEAD'])
+def test_change_hiring_manager_global_roles_and_validation(client, seed, role):
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,:role)"), {'id': seed['other'], 'role': role})
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'HIRING_MANAGER')"), {'id': seed['hr2']})
+    base = f"/v1/positions/{seed['pos']}"
+    initial = client.get(base+'/hiring-managers', headers=headers(seed['other'])).json()
+    payload = {'hiring_manager_user_id': seed['hr2'], 'expected_assignments': [row['version'] for row in initial]}
+    assert client.get(base+'/hiring-managers', headers=headers(seed['other'])).status_code == 200
+    assert client.put(base+'/hiring-manager', headers=headers(seed['other']), json={**payload, 'hiring_manager_user_id': seed['hr']}).status_code == 400
+    assert client.put(base+'/hiring-manager', headers=headers(seed['other']), json=payload).status_code == 200
+    now = client.get(base+'/hiring-managers', headers=headers(seed['other'])).json()
+    same = client.put(base+'/hiring-manager', headers=headers(seed['other']), json={**payload, 'expected_assignments': [row['version'] for row in now]})
+    assert same.status_code == 200 and same.json()['changed'] is False
+
+
+def test_change_hm_does_not_overwrite_pending_criteria_or_history(client, seed):
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'HIRING_MANAGER')"), {'id': seed['other']})
+    criteria = f"/v1/criteria/{seed['cv']}/approve"
+    assert client.post(criteria, headers=headers(seed['hr']), json={'action': 'APPROVE'}).json()['status'] == 'PENDING_HM_APPROVAL'
+    base = f"/v1/positions/{seed['pos']}"
+    versions = [row['version'] for row in client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()]
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json={'hiring_manager_user_id': seed['other'], 'expected_assignments': versions}).status_code == 200
+    assert client.post(criteria, headers=headers(seed['hm']), json={'action': 'APPROVE'}).status_code == 403
+    result = client.post(criteria, headers=headers(seed['other']), json={'action': 'APPROVE'})
+    assert result.status_code == 200 and result.json()['status'] == 'APPROVED'
+    history = client.get(f"/v1/criteria/{seed['cv']}/approval-events", headers=headers(seed['hr'])).json()
+    assert len(history) == 2
+    assert history[0]['reviewed_by'] == seed['hr'] and history[1]['reviewed_by'] == seed['other']
+
+
+def test_hm_change_rejects_invalid_account_and_old_assignment_version(client, seed):
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'HIRING_MANAGER')"), {'id': seed['other']})
+        conn.execute(text("UPDATE app_private.user_profiles SET account_status='SUSPENDED' WHERE user_id=:id"), {'id': seed['other']})
+    base = f"/v1/positions/{seed['pos']}"
+    old_versions = [row['version'] for row in client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()]
+    body = {'hiring_manager_user_id': seed['other'], 'expected_assignments': old_versions}
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json=body).status_code == 400
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE app_private.user_profiles SET account_status='ACTIVE' WHERE user_id=:id"), {'id': seed['other']})
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json=body).status_code == 200
+    new_versions = [row['version'] for row in client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()]
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json={'hiring_manager_user_id': seed['hm'], 'expected_assignments': new_versions}).status_code == 200
+    assert client.put(base+'/hiring-manager', headers=headers(seed['hr']), json=body).status_code == 409
+
+
+def test_change_hm_multiple_assignments_revokes_all_old_shares(client, seed):
+    with engine.begin() as conn:
+        for user in (seed['other'], seed['hr2']):
+            conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'HIRING_MANAGER')"), {'id': user})
+        conn.execute(text("INSERT INTO app_private.position_assignments(position_id,user_id,position_role) VALUES (:pos,:id,'HIRING_MANAGER')"), {'pos': seed['pos'], 'id': seed['other']})
+        conn.execute(text("UPDATE app_private.applications SET application_status='SHORTLIST' WHERE application_id=:id"), {'id': seed['app']})
+    share_ids = []
+    for hm in (seed['hm'], seed['other']):
+        response = client.post('/v1/shortlist/share', headers=headers(seed['hr']), json={'position_id': seed['pos'],
+            'shared_with_user_id': hm, 'application_ids': [seed['app']], 'allow_cv_view': False})
+        assert response.status_code == 201
+        share_ids.append(response.json()['share_id'])
+    base = f"/v1/positions/{seed['pos']}"
+    versions = [row['version'] for row in client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()]
+    result = client.put(base+'/hiring-manager', headers=headers(seed['hr']), json={'hiring_manager_user_id': seed['hr2'], 'expected_assignments': versions})
+    assert result.status_code == 200 and result.json()['revoked_shares'] == 2
+    for hm, share in zip((seed['hm'], seed['other']), share_ids):
+        assert client.get(f'/v1/shortlist/{share}', headers=headers(hm)).status_code == 403
+    current = client.get(base+'/hiring-managers', headers=headers(seed['hr'])).json()
+    assert [str(person['user_id']) for person in current] == [seed['hr2']]

@@ -70,6 +70,8 @@ export const positionsApi = {
   },
   create: (data: any) => apiClient.post('/positions', data),
   getById: (id: string) => apiClient.get(`/positions/${id}`),
+  getHiringManagers: (id: string) => apiClient.get(`/positions/${id}/hiring-managers`),
+  changeHiringManager: (id: string, userId: string, expectedAssignments: string[]) => apiClient.put(`/positions/${id}/hiring-manager`, { hiring_manager_user_id: userId, expected_assignments: expectedAssignments }),
   getWorkspace: (id: string) => apiClient.get(`/positions/${id}/workspace`),
   getDuplicateSignals: (id: string) => apiClient.get<DuplicateSignal[]>(`/positions/${id}/duplicate-signals`),
   update: (id: string, data: any) => apiClient.patch(`/positions/${id}`, data),

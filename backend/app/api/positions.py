@@ -4,9 +4,7 @@ from uuid import UUID
 from app.core.security import get_current_user
 from app.core.exceptions import NotFoundError
 from app.core.permissions import check_position_access, can_update_application_status
-from app.schemas.positions import Position, PositionCreate, PositionUpdate, PositionWithStats, PositionStatus, JDVersionCreate
-from app.schemas.common import ErrorResponse
-from app.db.supabase import get_supabase_client
+from app.schemas.positions import Position, PositionCreate, PositionUpdate, PositionWithStats, PositionStatus, JDVersionCreate, HiringManagerChange
 from app.db.database import SessionLocal
 from app.services.departments import DepartmentError, next_position_code
 from app.services.workspace import build_workflow
@@ -325,6 +323,125 @@ async def get_position_workspace(
             "system_roles": sorted(system_roles),
         },
     }
+
+
+@router.get("/{position_id}/hiring-managers")
+async def get_hiring_managers(position_id: UUID, current_user: dict = Depends(get_current_user)):
+    """Current assignments for HR; used as the optimistic concurrency token."""
+    actor = current_user["user_id"]
+    if not can_update_application_status(actor, str(position_id)):
+        raise HTTPException(status_code=403, detail="Chỉ HR phụ trách, HR Lead hoặc Admin được quản lý Hiring Manager")
+    db = SessionLocal()
+    try:
+        if not db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id=:id"), {"id": str(position_id)}).first():
+            raise NotFoundError("Position")
+        rows = db.execute(text("""
+            SELECT pa.user_id, up.display_name, up.account_status,
+                   CAST(pa.assignment_id AS text) || ':' || CAST(EXTRACT(EPOCH FROM pa.assigned_at) AS text) AS version
+            FROM app_private.position_assignments pa
+            JOIN app_private.user_profiles up ON up.user_id=pa.user_id
+            WHERE pa.position_id=:id AND pa.position_role='HIRING_MANAGER' AND pa.revoked_at IS NULL
+            ORDER BY pa.user_id
+        """), {"id": str(position_id)}).mappings().all()
+        return [dict(row) for row in rows]
+    finally:
+        db.close()
+
+
+@router.put("/{position_id}/hiring-manager")
+async def change_hiring_manager(position_id: UUID, request: HiringManagerChange,
+                                current_user: dict = Depends(get_current_user)):
+    """Transfer the position's HM assignment and revoke previous HM shares atomically."""
+    actor, target, position = str(current_user["user_id"]), str(request.hiring_manager_user_id), str(position_id)
+    db = SessionLocal()
+    try:
+        # Same first lock as criteria approval, share creation/feedback and retention.
+        if not db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id=:id FOR UPDATE"), {"id": position}).first():
+            raise NotFoundError("Position")
+        profiles = db.execute(text("""
+            SELECT user_id, account_status FROM app_private.user_profiles
+            WHERE user_id IN (:actor, :target) ORDER BY user_id FOR SHARE
+        """), {"actor": actor, "target": target}).mappings().all()
+        states = {str(row['user_id']): row['account_status'] for row in profiles}
+        if states.get(actor) != 'ACTIVE':
+            raise HTTPException(status_code=403, detail="Tài khoản chưa được kích hoạt hoặc đã bị khóa")
+        roles = db.execute(text("""
+            SELECT user_id, role_code FROM app_private.user_role_assignments
+            WHERE user_id IN (:actor, :target) AND revoked_at IS NULL ORDER BY user_id, role_code FOR SHARE
+        """), {"actor": actor, "target": target}).mappings().all()
+        actor_roles = {r['role_code'] for r in roles if str(r['user_id']) == actor}
+        target_roles = {r['role_code'] for r in roles if str(r['user_id']) == target}
+        assignments = db.execute(text("""
+            SELECT assignment_id, user_id, position_role, assigned_by, assigned_at,
+                   CAST(assignment_id AS text) || ':' || CAST(EXTRACT(EPOCH FROM assigned_at) AS text) AS version
+            FROM app_private.position_assignments
+            WHERE position_id=:position AND revoked_at IS NULL
+              AND (position_role='HIRING_MANAGER' OR (user_id=:actor AND position_role IN ('HR_RECRUITER','HR_LEAD')))
+            ORDER BY user_id, position_role FOR UPDATE
+        """), {"position": position, "actor": actor}).mappings().all()
+        authorized = bool(actor_roles & {'ADMIN', 'HR_LEAD'}) or any(
+            str(row['user_id']) == actor and row['position_role'] in ('HR_RECRUITER', 'HR_LEAD') for row in assignments)
+        if not authorized:
+            raise HTTPException(status_code=403, detail="Chỉ HR phụ trách, HR Lead hoặc Admin được quản lý Hiring Manager")
+        if states.get(target) != 'ACTIVE' or 'HIRING_MANAGER' not in target_roles:
+            raise HTTPException(status_code=400, detail="Hiring Manager phải có tài khoản hoạt động và vai trò HM.")
+        if actor == target or db.execute(text("""
+            SELECT 1 FROM app_private.position_assignments WHERE position_id=:position AND user_id=:target
+              AND position_role IN ('HR_RECRUITER','HR_LEAD') AND revoked_at IS NULL
+        """), {"position": position, "target": target}).first():
+            raise HTTPException(status_code=400, detail="Hiring Manager phải khác HR phụ trách vị trí.")
+        previous = sorted(str(row['user_id']) for row in assignments if row['position_role'] == 'HIRING_MANAGER')
+        expected = sorted(request.expected_assignments)
+        versions = sorted(row['version'] for row in assignments if row['position_role'] == 'HIRING_MANAGER')
+        if len(expected) != len(set(expected)) or expected != versions:
+            raise HTTPException(status_code=409, detail="Phân công Hiring Manager đã thay đổi. Vui lòng tải lại trước khi lưu.")
+        if previous == [target]:
+            return {"changed": False, "hiring_manager_user_id": target, "revoked_shares": 0}
+        from app.services.retention import position_has_inflight_purge
+        if position_has_inflight_purge(db, position):
+            raise HTTPException(status_code=409, detail="Vị trí có case xóa đang xử lý hoặc cần phục hồi")
+        # Revoke the previous recipients' shares AND stale active shares of a
+        # returning target, so reassignment cannot silently reopen old access.
+        affected = sorted(set(previous + [target]))
+        shares = db.execute(text("""
+            UPDATE app_private.shortlist_shares SET status='REVOKED', revoked_at=now()
+            WHERE position_id=:position AND status='ACTIVE' AND CAST(shared_with AS text)=ANY(:affected)
+            RETURNING share_id
+        """), {"position": position, "affected": affected}).scalars().all()
+        for share_id in shares:
+            db.execute(text("""
+                INSERT INTO app_private.audit_events (actor_user_id,action_type,object_type,object_id,position_id,outcome,metadata)
+                VALUES (:actor,'REVOKE_SHORTLIST','SHORTLIST_SHARE',:share,:position,'SUCCESS',CAST(:metadata AS jsonb))
+            """), {"actor": actor, "share": str(share_id), "position": position,
+                    "metadata": json.dumps({"reason_code": "HIRING_MANAGER_CHANGE"})})
+        old_assignments = [{'user_id': str(row['user_id']), 'assignment_id': str(row['assignment_id']),
+                            'assigned_by': str(row['assigned_by']) if row['assigned_by'] else None,
+                            'assigned_at': row['assigned_at'].isoformat() if row['assigned_at'] else None}
+                           for row in assignments if row['position_role'] == 'HIRING_MANAGER']
+        db.execute(text("""
+            UPDATE app_private.position_assignments SET revoked_at=now()
+            WHERE position_id=:position AND position_role='HIRING_MANAGER' AND revoked_at IS NULL
+        """), {"position": position})
+        db.execute(text("""
+            INSERT INTO app_private.position_assignments (position_id,user_id,position_role,assigned_by)
+            VALUES (:position,:target,'HIRING_MANAGER',:actor)
+            ON CONFLICT (position_id,user_id,position_role) DO UPDATE
+            SET revoked_at=NULL, assigned_by=EXCLUDED.assigned_by, assigned_at=now()
+        """), {"position": position, "target": target, "actor": actor})
+        db.execute(text("""
+            INSERT INTO app_private.audit_events (actor_user_id,action_type,object_type,object_id,position_id,outcome,metadata)
+            VALUES (:actor,'CHANGE_HIRING_MANAGER','POSITION',:position,:position,'SUCCESS',CAST(:metadata AS jsonb))
+        """), {"actor": actor, "position": position, "metadata": json.dumps({
+            'previous_assignments': old_assignments, 'new_hiring_manager_id': target,
+            'revoked_share_ids': [str(share) for share in shares],
+        })})
+        db.commit()
+        return {"changed": True, "hiring_manager_user_id": target, "revoked_shares": len(shares)}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @router.patch("/{position_id}", response_model=Position)

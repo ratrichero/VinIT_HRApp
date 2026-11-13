@@ -50,17 +50,17 @@ Theo checklist: E2E-14 OCR, E2E-15 BGE và E2E-16 recovery có điều kiện; c
 | F1.07 | Detector dùng exact email/phone trong cùng vị trí; thay identity dismiss pending cũ và phát hiện lại ở ranking sau. E2E-08 chỉ chứng minh một `EMAIL_MATCH`; API/UI đọc tín hiệu đã có ở commit `cf9807d`. | Người dùng chọn A4 phương án 1: chấp nhận giới hạn email/SĐT cho phạm vi Phase 1, không yêu cầu detector trùng nội dung file; không thêm cross-position/auto-merge. Đây không tự xác nhận toàn bộ nghiệm thu detector. |
 | F1.08–10 | Trạng thái do HR quyết định; shortlist/feedback/revoke E2E-09 đã ghi PASS; audit/retention như DEP-02. | Đóng các lỗ hổng retention ở mục 3; xác nhận audit chính sách/ma trận quyền, không suy toàn bộ retention PASS từ E2E-09. |
 | F1.11–12 | Privacy egress còn chặn dữ liệu thật; giao diện VI/EN có test. | DEP-05; review thuật ngữ/trải nghiệm VI/EN **tạm treo — chờ report** (B7 trong `PHASE1_PRODUCTION_DEFERRED_REPORT.md`), đặc biệt điểm một phần và UNCLEAR. |
-| Pilot quality | `doc/HRA_NextPhase.md` gọi pilot evaluation là **F1.13**, trong khi closure review dùng F1.13 cho dashboard/worker. PRD ghi mục tiêu khoảng 300 cặp, tối thiểu đề xuất 200, HR/HM xác nhận và phân xử. | Cần PO thống nhất mapping ID/nguồn yêu cầu; không bỏ sót pilot. `evaluate_matching.py` hiện chủ yếu đo repeatability, không tự chứng minh toàn bộ chất lượng extraction/matching/ranking. Thiết kế evaluation có mẫu/nhãn, nhóm IT, định nghĩa denominator, tránh leakage, phân xử, báo cáo từng nhóm; kiểm tra có đủ coverage công cụ trước khi chọn xây thêm. |
+| Pilot quality | `doc/HRA_NextPhase.md` gọi pilot evaluation là **F1.13**, trong khi closure review dùng F1.13 cho dashboard/worker. PRD ghi mục tiêu khoảng 300 cặp, tối thiểu đề xuất 200, HR/HM xác nhận và phân xử. | Mapping theo dõi đã thống nhất bên dưới; không bỏ sót pilot. `evaluate_matching.py` hiện chủ yếu đo repeatability, không tự chứng minh toàn bộ chất lượng extraction/matching/ranking. Thiết kế evaluation có mẫu/nhãn, nhóm IT, định nghĩa denominator, tránh leakage, phân xử, báo cáo từng nhóm; kiểm tra có đủ coverage công cụ trước khi chọn xây thêm. |
 | Dashboard/worker | Có code, test và at-least-once; topology/monitoring/recovery môi trường đích chưa được chốt. | Theo DEP-03/08 và E2E-16 nếu đưa vào phạm vi. Không tuyên bố exactly-once. |
 
-### Đối chiếu nhãn F1.13 — đề xuất, chưa phải quyết định PO
+### Đối chiếu nhãn F1.13 — theo quyết định người dùng
 
 | Nguồn | Mã / nội dung | Tình trạng |
 |---|---|---|
 | `HRA_NextPhase.md` | **F1.09**: shortlist + dashboard nghiệp vụ cơ bản; **F1.13**: đánh giá pilot trên tập nhãn chuẩn | Benchmark, gold và phê duyệt vận hành tạm treo; chưa có kết quả đánh giá chất lượng được nghiệm thu. |
 | `audit/PHASE1_REVIEW_2026-11-07.md` và `audit/PHASE1_GAP_ANALYSIS.md` | **F1.13**: dashboard/worker trong bảng audit lịch sử | Tên mã bị dùng khác so với `HRA_NextPhase.md`; trạng thái dashboard/worker có bằng chứng code/test riêng nhưng chưa đóng gate vận hành. |
 
-Đề xuất cho bảng theo dõi mới: giữ F1.09 cho shortlist/dashboard nghiệp vụ, F1.13 cho pilot evaluation theo `HRA_NextPhase.md`, và theo dõi worker/recovery như hạng mục kỹ thuật liên kết F1.09 cùng DEP-03/DEP-08, E2E-16 nếu thuộc phạm vi. Dashboard chi phí LLM và Langfuse là theo dõi vận hành AI riêng, không thay thế F1.13. Giữ nguyên mã lịch sử trong các audit; chỉ liên kết bằng alias, không sửa dữ liệu/chứng cứ và không suy ra PASS. PO/HR/HM xác nhận nguồn chuẩn trước khi khóa mapping chính thức.
+Người dùng đồng ý phương án sau cho bảng theo dõi mới: giữ F1.09 cho shortlist/dashboard nghiệp vụ, F1.13 cho pilot evaluation theo `HRA_NextPhase.md`, và theo dõi worker/recovery như hạng mục kỹ thuật liên kết F1.09 cùng DEP-03/DEP-08, E2E-16 nếu thuộc phạm vi. Dashboard chi phí LLM và Langfuse là theo dõi vận hành AI riêng, không thay thế F1.13. Giữ nguyên mã lịch sử trong các audit; chỉ liên kết bằng alias, không sửa dữ liệu/chứng cứ và không suy ra PASS. Quyết định này thống nhất mapping theo dõi, không tự phê duyệt pilot hay đóng bất kỳ gate nào.
 
 PRD nêu **mục tiêu khởi điểm**, cần chốt trước khi đo: extraction F1 ≥85% từng nhóm; matching Macro-F1 ≥0.80; chuyên gia xác nhận đạt mandatory nhưng AI `NO_MATCH` ≤5%; NDCG@5 ≥0.75; và các mục tiêu quote, lỗi file, RBAC tại PRD. Thiếu dữ liệu/định nghĩa không được ghi PASS hoặc thay bằng kết quả synthetic.
 
@@ -114,3 +114,9 @@ DEP-03/04/05 và DEP-08 theo chủ sở hữu; pilot quality theo bộ dữ li�
 - Khi mở lại: đối chiếu mapping F1.13, quyết định riêng về release/migration và E2E, xác nhận owner/bằng chứng từng DEP. Giữ direct approval, không tự bật BGE/LTR, SSO, F2.07 hay rediscovery.
 
 Mọi trạng thái, commit, kết quả CI, quyết định phạm vi và bằng chứng thực tế phải được cập nhật trong `Update_Excute_P1.md`/`Update_Excute_P2.md` và checklist tương ứng khi phát sinh; không sửa lại các biên bản lịch sử để giả lập nghiệm thu.
+
+### Đổi Hiring Manager sau khi tạo vị trí
+
+HR phụ trách vị trí, HR Lead hoặc Admin có thể đổi HM tại chi tiết vị trí. HM được chọn phải có tài khoản ACTIVE và vai trò hệ thống HIRING_MANAGER; không được là người thực hiện hay HR đang phụ trách vị trí. Khi thực sự đổi, các phân công HM hiện tại và shortlist ACTIVE của những HM đó được thu hồi trong cùng giao dịch; shortlist ACTIVE còn sót của người được bổ nhiệm cũng bị thu hồi. Phản hồi, lịch sử duyệt và bản ghi chia sẻ được giữ. HM mới chỉ xem shortlist sau khi HR chủ động chia sẻ mới; bổ nhiệm lại HM cũ không khôi phục share đã thu hồi. Các quyền độc lập khác không tự thu hồi. Thao tác và các share bị thu hồi được ghi audit; phân công cũ được ghi trong metadata audit khi bản ghi phân công được tái sử dụng.
+
+Duyệt tiêu chí đang chờ HM tiếp tục theo phân công mới; quyết định đã có không bị sửa. Nếu dữ liệu phân công thay đổi trong lúc mở hộp thoại, API trả 409 và người dùng cần đóng/mở lại để tải dữ liệu mới. Đổi HM bị chặn khi vị trí có case purge đang xử lý hoặc cần phục hồi. Chọn lại HM duy nhất đang phụ trách là no-op, không thu hồi share. Các kiểm thử cục bộ không thay thế E2E hay nghiệm thu môi trường đích.

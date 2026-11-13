@@ -51,6 +51,7 @@ import NextActionCard from '@/components/workflow/NextActionCard';
 import PositionSummary from '@/components/workflow/PositionSummary';
 import OperationProgressPanel from '@/components/workflow/OperationProgressPanel';
 import CVIntakePanel from '@/components/positions/CVIntakePanel';
+import HiringManagerChange from './HiringManagerChange';
 import { validateIntakeFiles } from '@/lib/intake';
 import type { Position, CriteriaVersion, Criterion, JDVersion, RequirementSpec, PositionWorkspace } from '@/types';
 
@@ -539,6 +540,7 @@ export default function PositionDetailPage() {
           </Box>
         </Box>
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+          {isHR && <HiringManagerChange positionId={positionId} onChanged={loadData} />}
           {isHR && <Button variant="outlined" startIcon={<EditOutlinedIcon />} onClick={() => {
             setPositionTitle(position.title); setPositionStatus(position.status); setPositionEditError(null); setPositionDialogOpen(true);
           }}>{t("Chỉnh sửa vị trí")}</Button>}
