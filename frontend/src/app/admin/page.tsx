@@ -11,9 +11,11 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { adminApi } from '@/lib/api';
 import { moveRoute } from '@/lib/orderedRoutes';
+import { formatUsd } from '@/lib/llmCost';
 
 type WorkerHealth = { pending: number; processing: number; stale_heartbeat: number; long_running: number; failed_24h: number; recoveries_24h: number; oldest_pending_seconds: number };
-type RuntimeConfig = { config_id?: string | null; provider: string; provider_name?: string | null; model_name: string; api_base?: string | null; temperature_default: number; external_api_allowed: boolean; api_key_configured?: boolean; api_key_hint?: string | null; fallbacks?: RuntimeConfig[] };
+type RuntimeConfig = { config_id?: string | null; provider: string; provider_name?: string | null; model_name: string; api_base?: string | null; temperature_default: number; external_api_allowed: boolean; api_key_configured?: boolean; api_key_hint?: string | null; fallbacks?: RuntimeConfig[]; input_price_per_million_usd?: number | string | null; output_price_per_million_usd?: number | string | null };
+type LlmUsageSummary = { attempts: number; priced_attempts: number; unpriced_attempts: number; estimated_usd: string | number | null; first_observed_at: string | null; by_config: { config_id: string | null; model_name: string; provider: string; estimated_usd: string | number | null; unpriced_attempts: number }[] };
 type AIOptions = { models: string[]; endpoints: string[]; external_api_allowed: boolean; custom_openai_compatible?: { api_key_encryption_configured: boolean } };
 type ConfigVersion = RuntimeConfig & { config_id: string; status: string; created_at: string };
 type ConnectionTestResult = { ok: boolean; status_code?: number | null; latency_ms?: number; provider_name?: string | null; model?: string; provider_returned_model?: string | null; error_code?: string; message: string };
@@ -40,6 +42,10 @@ export default function AdminPage() {
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [temperature, setTemperature] = useState('0.1');
+  const [inputPrice, setInputPrice] = useState('');
+  const [outputPrice, setOutputPrice] = useState('');
+  const [editingConfig, setEditingConfig] = useState<RuntimeConfig | null>(null);
+  const [usage, setUsage] = useState<LlmUsageSummary | null>(null);
   const [fallbackIds, setFallbackIds] = useState<string[]>([]);
   const [fallbackApproved, setFallbackApproved] = useState(false);
   const [auxDrafts, setAuxDrafts] = useState<AuxDraft[]>([]);
@@ -71,18 +77,18 @@ export default function AdminPage() {
 
   const isCompatible = provider === 'compatible';
   const apiKeyEncryptionReady = options?.custom_openai_compatible?.api_key_encryption_configured ?? false;
-  const activeKeyReusable = isCompatible && source === 'database' && config?.provider === 'compatible'
-    && Boolean(config.api_key_configured) && normalizeBaseUrl(customBaseUrl) !== ''
-    && normalizeBaseUrl(customBaseUrl) === normalizeBaseUrl(config.api_base || '');
+  const activeKeyReusable = isCompatible && editingConfig?.provider === 'compatible'
+    && Boolean(editingConfig.config_id && editingConfig.api_key_configured) && normalizeBaseUrl(customBaseUrl) !== ''
+    && normalizeBaseUrl(customBaseUrl) === normalizeBaseUrl(editingConfig.api_base || '');
 
   const load = useCallback(async (sync: { llm?: boolean; bge?: boolean } = { llm: true, bge: true }) => {
     try {
       setLoading(true); setError(null);
-      const [active, worker, permitted, history, auxiliary, models, bgeSet, ltrSelected, reranker] = await Promise.all([
+      const [active, worker, permitted, history, auxiliary, models, bgeSet, ltrSelected, reranker, usageSummary] = await Promise.all([
         adminApi.getActiveAiConfig(), adminApi.getWorkerHealth(), adminApi.getAiOptions(), adminApi.listAiConfigs(),
-        adminApi.listAuxiliaryDrafts(), adminApi.listLtrModels(), adminApi.getBgeRouteSet(), adminApi.getLtrSelection(), adminApi.getReranker(),
+        adminApi.listAuxiliaryDrafts(), adminApi.listLtrModels(), adminApi.getBgeRouteSet(), adminApi.getLtrSelection(), adminApi.getReranker(), adminApi.getLlmUsageSummary(),
       ]);
-      setAuxDrafts(auxiliary.data); setLtrModels(models.data);
+      setAuxDrafts(auxiliary.data); setLtrModels(models.data); setUsage(usageSummary.data);
       setRerankerSelection(reranker.data.selection); setRerankerApproved(false);
       setLtrSelection(ltrSelected.data.selection);
       setLtrEnabled(Boolean(ltrSelected.data.enabled));
@@ -103,6 +109,9 @@ export default function AdminPage() {
         setApiKey('');
         setTestResult(null);
         setTemperature(String(current.temperature_default));
+        setEditingConfig(current);
+        setInputPrice(current.input_price_per_million_usd == null ? '' : String(current.input_price_per_million_usd));
+        setOutputPrice(current.output_price_per_million_usd == null ? '' : String(current.output_price_per_million_usd));
         setFallbackIds((current.fallbacks || []).map(item => item.config_id).filter((id): id is string => Boolean(id)));
         setFallbackApproved(false);
       }
@@ -111,6 +120,18 @@ export default function AdminPage() {
     } finally { setLoading(false); }
   }, [t]);
   useEffect(() => { load(); }, [load]);
+
+  const editLlm = (item: RuntimeConfig) => {
+    setEditingConfig(item); setProvider(item.provider); setProviderName(item.provider_name || '');
+    setModel(item.model_name); setEndpoint(item.api_base || '');
+    setCustomModel(item.model_name); setCustomBaseUrl(item.api_base || '');
+    setTemperature(String(item.temperature_default)); setApiKey(''); setTestResult(null);
+    setInputPrice(item.input_price_per_million_usd == null ? '' : String(item.input_price_per_million_usd));
+    setOutputPrice(item.output_price_per_million_usd == null ? '' : String(item.output_price_per_million_usd));
+    setFallbackIds(item.config_id === config?.config_id ? (config?.fallbacks || []).map(route => route.config_id).filter((id): id is string => Boolean(id)) : []);
+    setFallbackApproved(false);
+    document.getElementById('llm-editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const save = async (activateNow: boolean) => {
     const value = Number(temperature);
@@ -121,6 +142,8 @@ export default function AdminPage() {
         ? "Vui lòng nhập Base URL, Model và temperature trong khoảng 0–1."
         : "Vui lòng chọn model, endpoint và temperature trong khoảng 0–1.")); return;
     }
+    const validPrice = (v: string) => v === '' || (/^\d+(?:\.\d{1,6})?$/.test(v) && Number(v) <= 1000000);
+    if (!validPrice(inputPrice) || !validPrice(outputPrice)) { setError(t("Giá phải từ 0 đến 1.000.000, tối đa 6 chữ số thập phân.")); return; }
     if (fallbackIds.length && !fallbackApproved) {
       setError(t("Cần xác nhận từng nhà cung cấp dự phòng đã được phê duyệt xử lý dữ liệu")); return;
     }
@@ -138,8 +161,8 @@ export default function AdminPage() {
       setSaving(true); setError(null); setSuccess(null);
       const payload = isCompatible
         ? { provider, provider_name: providerName.trim(), model_name: selectedModel, api_base: selectedEndpoint,
-            ...(apiKey ? { api_key: apiKey } : {}), temperature_default: value, fallback_config_ids: fallbackIds, fallback_destinations_approved: fallbackApproved }
-        : { provider, model_name: selectedModel, api_base: selectedEndpoint, temperature_default: value, fallback_config_ids: fallbackIds, fallback_destinations_approved: fallbackApproved };
+            ...(apiKey ? { api_key: apiKey } : activeKeyReusable ? { reuse_config_id: editingConfig?.config_id } : {}), temperature_default: value, input_price_per_million_usd: inputPrice || null, output_price_per_million_usd: outputPrice || null, fallback_config_ids: fallbackIds, fallback_destinations_approved: fallbackApproved }
+        : { provider, model_name: selectedModel, api_base: selectedEndpoint, temperature_default: value, input_price_per_million_usd: inputPrice || null, output_price_per_million_usd: outputPrice || null, fallback_config_ids: fallbackIds, fallback_destinations_approved: fallbackApproved };
       const created = await adminApi.createAiConfig(payload);
       setApiKey('');
       if (activateNow) await adminApi.enableAiConfig(created.data.config_id);
@@ -164,7 +187,7 @@ export default function AdminPage() {
       setTesting(true); setTestResult(null); setError(null);
       const response = await adminApi.testAiConnection({
         provider, provider_name: providerName.trim(), model_name: customModel.trim(), api_base: customBaseUrl.trim(),
-        ...(apiKey ? { api_key: apiKey } : {}), temperature_default: value,
+        ...(apiKey ? { api_key: apiKey } : activeKeyReusable ? { reuse_config_id: editingConfig?.config_id } : {}), temperature_default: value,
       });
       setTestResult(response.data);
     } catch (err: any) {
@@ -264,25 +287,26 @@ export default function AdminPage() {
           {isCompatible && !options.external_api_allowed && <Alert severity="warning" sx={{ mb: 3 }}>{t("Endpoint HTTPS bên ngoài chỉ gửi được khi server bật ALLOW_EXTERNAL_API=true. Endpoint nội bộ/loopback vẫn phải qua kiểm tra chính sách mạng.")}</Alert>}
           {!allowed && <Alert severity="warning" sx={{ mb: 3 }}>{t("Cấu hình hiện tại chưa hợp lệ theo chính sách của tiến trình này. Kiểm tra danh sách cho phép và kết nối trước khi dùng AI.")}</Alert>}
           <Alert severity="info" sx={{ mb: 3 }}>{t("Mọi lựa chọn nhà cung cấp chỉ dùng giao thức OpenAI-compatible /chat/completions với Bearer. Không hỗ trợ trực tiếp API Azure riêng (api-key/api-version); cần gateway tương thích đã được phê duyệt.")}</Alert>
-          <Card variant="outlined"><CardContent sx={{ p: 3 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}><Typography variant="h4">{t("Cấu hình đang sử dụng")}</Typography><Chip size="small" label={source === 'database' ? t("Phiên bản đã kích hoạt") : t("Mặc định môi trường")} /></Box>
-            <Grid container spacing={3}>
-              {[
-                [t("Nhà cung cấp"), config.provider_name ? `${config.provider_name} (${config.provider})` : config.provider],
-                ['Model', config.model_name], ['API endpoint', config.api_base || t("Chưa cấu hình")],
-                ['API Key', config.api_key_configured ? `${t("Đã cấu hình")} ${config.api_key_hint || ''}`.trim() : t("Chưa cấu hình")],
-                [t("Temperature tạo tiêu chí"), String(config.temperature_default)], [t("API bên ngoài"), config.external_api_allowed ? t("Môi trường cho phép") : t("Không cho phép")],
-              ].map(([label, value]) => <Grid item xs={12} sm={6} key={label}>
-                <Typography variant="caption" color="text.secondary">{label}</Typography>
-                <Typography variant="body1" sx={{ mt: 0.5, wordBreak: 'break-word', fontWeight: 600 }}>{value}</Typography>
-              </Grid>)}
+          <Grid container spacing={3} alignItems="flex-start">
+          <Grid item xs={12} md={8}>
+          <Typography variant="h4" sx={{ mb: 1 }}>{t("Nhà cung cấp trong chuỗi hiện tại")}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{t("Các thẻ dưới đây là cấu hình đang lưu, không xác nhận kết nối worker. Chỉnh sửa tạo phiên bản mới; chuỗi chỉ đổi sau khi kích hoạt.")}</Typography>
+          {[config, ...(config.fallbacks || [])].map((item, index) => <Card variant="outlined" key={item.config_id || `route-${index}`} sx={{ mb: 2, borderColor: index === 0 ? 'primary.light' : 'divider' }}><CardContent sx={{ p: 2.5 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}><Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}><Chip size="small" color={index === 0 ? 'primary' : 'default'} label={index === 0 ? t("Chính") : `${t("Dự phòng")} ${index}`} /><Typography fontWeight={700}>{item.provider_name || item.provider}</Typography></Box><Button size="small" onClick={() => editLlm(item)}>{t("Tạo phiên bản từ thẻ này")}</Button></Box>
+            <Grid container spacing={1} sx={{ mt: 1 }}>
+              <Grid item xs={12} sm={6}><Typography variant="caption" color="text.secondary">Model</Typography><Typography variant="body2">{item.model_name}</Typography></Grid>
+              <Grid item xs={12} sm={6}><Typography variant="caption" color="text.secondary">Base URL</Typography><Typography variant="body2" sx={{ wordBreak: 'break-all' }}>{item.api_base || '—'}</Typography></Grid>
+              <Grid item xs={12} sm={6}><Typography variant="caption" color="text.secondary">API Key</Typography><Typography variant="body2">{item.api_key_configured ? `${t("Đã lưu API key")} ${item.api_key_hint || ''}` : t("Chưa lưu API key")}</Typography></Grid>
+              <Grid item xs={12} sm={6}><Typography variant="caption" color="text.secondary">{t("Giá USD / 1 triệu token (vào / ra)")}</Typography><Typography variant="body2">{item.input_price_per_million_usd ?? '—'} / {item.output_price_per_million_usd ?? '—'}</Typography></Grid>
             </Grid>
-            <Typography variant="subtitle2" sx={{ mt: 2 }}>{t("Chuỗi LLM dự phòng đang lưu")}</Typography>
-            {(config.fallbacks || []).length ? config.fallbacks?.map((item, index) => <Typography key={item.config_id || index} variant="body2">{index + 1}. {item.provider_name || item.provider} · {item.model_name} · {item.api_base || '—'}</Typography>) : <Typography variant="body2" color="text.secondary">{t("Không có LLM dự phòng")}</Typography>}
-          </CardContent></Card>
-          <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
-            <Typography variant="h4" sx={{ mb: 2 }}>{t("Tạo và kích hoạt phiên bản mới")}</Typography>
+          </CardContent></Card>)}
+          <Card id="llm-editor" variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>
+            <Typography variant="h4" sx={{ mb: 1 }}>{t("Tạo và kích hoạt phiên bản mới")}</Typography><Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>{t("Lưu bản nháp không thay đổi chuỗi đang chạy. Muốn thay dự phòng, lưu bản nháp rồi chọn nó trong chuỗi của phiên bản chính mới.")}</Typography>
             {!isCompatible && options.endpoints.length === 0 && <Alert severity="warning" sx={{ mb: 2 }}>{t("Chưa có endpoint được phép. Quản trị viên hệ thống cần cấu hình môi trường trước.")}</Alert>}
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>{t("Mẫu nhanh (chỉ điền Base URL)")}:</Typography>
+              {[['OpenAI', 'https://api.openai.com/v1'], ['OpenRouter', 'https://openrouter.ai/api/v1'], ['Groq', 'https://api.groq.com/openai/v1']].map(([name, base]) => <Button key={name} size="small" variant="outlined" onClick={() => { setProvider('compatible'); setProviderName(name); setCustomBaseUrl(base); setCustomModel(''); setApiKey(''); setEditingConfig(null); setTestResult(null); }}>{name}</Button>)}
+            </Box>
             <Grid container spacing={2}>
               <Grid item xs={12} sm={6}><FormControl fullWidth size="small"><InputLabel id="ai-provider-label">{t("Nhà cung cấp")}</InputLabel>
                 <Select labelId="ai-provider-label" label={t("Nhà cung cấp")} value={provider} onChange={e => {
@@ -299,7 +323,7 @@ export default function AdminPage() {
                 <Grid item xs={12} sm={7}><TextField fullWidth size="small" label="Base URL" value={customBaseUrl} onChange={e => { setCustomBaseUrl(e.target.value); setTestResult(null); }} placeholder={t("Ví dụ: https://api.openai.com/v1")} autoComplete="url" /></Grid>
                 <Grid item xs={12} sm={5}><TextField fullWidth size="small" label="Model" value={customModel} onChange={e => { setCustomModel(e.target.value); setTestResult(null); }} placeholder={t("Nhập model của nhà cung cấp")} autoComplete="off" /></Grid>
                 <Grid item xs={12} sm={8}><TextField fullWidth size="small" label="API Key" type="password" value={apiKey} onChange={e => { setApiKey(e.target.value); setTestResult(null); }} placeholder={t("Nhập API key của nhà cung cấp")} autoComplete="new-password"
-                  helperText={activeKeyReusable ? t("Đã lưu API key {0}. Để trống để giữ nguyên cho cùng Base URL.", config.api_key_hint || '') : t("API key được mã hóa phía server và không hiển thị lại.")} /></Grid>
+                  helperText={activeKeyReusable ? t("Đã lưu API key {0}. Để trống để giữ nguyên cho cùng Base URL.", editingConfig?.api_key_hint || '') : t("API key được mã hóa phía server và không hiển thị lại.")} /></Grid>
                 <Grid item xs={12} sm={4}><TextField fullWidth size="small" type="number" label="Temperature" value={temperature} onChange={e => { setTemperature(e.target.value); setTestResult(null); }} inputProps={{ min: 0, max: 1, step: 0.05 }} /></Grid>
               </> : <>
                 <Grid item xs={12} sm={6}><FormControl fullWidth size="small"><InputLabel id="ai-model-label">{t("Model được phép")}</InputLabel>
@@ -313,6 +337,11 @@ export default function AdminPage() {
                 <Grid item xs={12} sm={4}><TextField fullWidth size="small" type="number" label="Temperature" value={temperature} onChange={e => setTemperature(e.target.value)} inputProps={{ min: 0, max: 1, step: 0.05 }} /></Grid>
               </>}
             </Grid>
+            <Grid container spacing={2} sx={{ mt: 0.5 }}>
+              <Grid item xs={12} sm={6}><TextField fullWidth size="small" label={t("Giá đầu vào (USD / 1 triệu token)")} value={inputPrice} onChange={e => setInputPrice(e.target.value)} inputProps={{ inputMode: 'decimal' }} placeholder="0.15" /></Grid>
+              <Grid item xs={12} sm={6}><TextField fullWidth size="small" label={t("Giá đầu ra (USD / 1 triệu token)")} value={outputPrice} onChange={e => setOutputPrice(e.target.value)} inputProps={{ inputMode: 'decimal' }} placeholder="0.60" /></Grid>
+            </Grid>
+            <Typography variant="caption" color="text.secondary">{t("Để trống nếu chưa biết; 0 nghĩa là miễn phí. Giá là do Admin nhập và được ghim theo phiên bản.")}</Typography>
             <Box sx={{ mt: 2 }}>
               <Typography variant="subtitle1">{t("LLM dự phòng theo thứ tự")}</Typography>
               <Typography variant="caption" color="text.secondary" display="block">{t("Thêm tối đa 3 phiên bản đã lưu. Dùng nút lên/xuống để đổi thứ tự ưu tiên; chỉ chọn nhà cung cấp được phê duyệt xử lý dữ liệu.")}</Typography>
@@ -350,9 +379,25 @@ export default function AdminPage() {
             <Typography variant="h4" sx={{ mb: 2 }}>{t("Lịch sử phiên bản")}</Typography>
             {versions.map(version => <Box key={version.config_id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', py: 1 }}>
               <Box><Typography variant="body2" fontWeight={600}>{version.provider_name ? `${version.provider_name} · ` : ''}{version.model_name} · {t(version.status === "ACTIVE" ? "Đang hoạt động cấu hình" : version.status === "DRAFT" ? "Bản nháp cấu hình" : "Đã tắt cấu hình")}</Typography><Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>{version.api_base || t("Không có endpoint")} · {new Date(version.created_at).toLocaleString(dateLocale)} · {version.api_key_configured ? `${t("Đã lưu API key")} ${version.api_key_hint || ''}`.trim() : t("Chưa lưu API key")}</Typography></Box>
-              {version.status !== 'ACTIVE' && <Button size="small" disabled={saving} onClick={() => activate(version.config_id)}>{t("Kích hoạt")}</Button>}
+              <Box><Button size="small" disabled={saving} onClick={() => editLlm(version)}>{t("Tạo phiên bản từ thẻ này")}</Button>{version.status !== 'ACTIVE' && <Button size="small" disabled={saving} onClick={() => activate(version.config_id)}>{t("Kích hoạt")}</Button>}</Box>
             </Box>)}
           </CardContent></Card>}
+          </Grid>
+          <Grid item xs={12} md={4}>
+            <Card variant="outlined" sx={{ position: { md: 'sticky' }, top: { md: 16 } }}><CardContent sx={{ p: 2.5 }}>
+              <Typography variant="h6">{t("Chuỗi đang cấu hình")}</Typography>
+              <Typography variant="caption" color="text.secondary">{source === 'database' ? t("Phiên bản đã kích hoạt") : t("Mặc định môi trường")} · {t("Chưa xác minh trạng thái từng worker.")}</Typography>
+              {[config, ...(config.fallbacks || [])].map((item, index) => <Box key={item.config_id || index} sx={{ mt: 1.5 }}><Typography variant="body2" fontWeight={700}>{index + 1}. {item.provider_name || item.provider}</Typography><Typography variant="caption" color="text.secondary">{item.model_name} · {item.api_key_hint || '—'}</Typography></Box>)}
+              <Typography variant="h6" sx={{ mt: 3 }}>{t("Chi phí LLM ước tính")}</Typography>
+              <Typography variant="h5" sx={{ mt: 1 }}>{formatUsd(usage?.estimated_usd)}</Typography>
+              {usage?.first_observed_at && <Typography variant="caption" color="text.secondary" display="block">{t("Từ lượt ghi nhận đầu tiên")}: {new Date(usage.first_observed_at).toLocaleString(dateLocale)}</Typography>}
+              <Typography variant="caption" color="text.secondary" display="block">{t("Lượt có giá")}: {usage?.priced_attempts ?? 0} · {t("Chưa tính được")}: {usage?.unpriced_attempts ?? 0}</Typography>
+              {(usage?.by_config || []).slice(0, 5).map((item, index) => <Typography key={item.config_id || `environment-${index}`} variant="caption" display="block" sx={{ mt: 0.5, wordBreak: 'break-word' }}>{versions.find(version => version.config_id === item.config_id)?.provider_name || item.provider} · {item.model_name}: {formatUsd(item.estimated_usd)} · {t("Chưa tính được")}: {item.unpriced_attempts}</Typography>)}
+              {(usage?.by_config?.length || 0) > 5 && <Typography variant="caption" color="text.secondary">{t("Chỉ hiển thị 5 nhóm gần nhất; tổng gồm tất cả lượt đã ghi nhận.")}</Typography>}
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>{t("Chỉ gồm lượt có token và giá; có thể thiếu retry, lỗi hoặc dữ liệu cũ. Không phải hóa đơn; test kết nối và BGE/reranker không tính.")}</Typography>
+            </CardContent></Card>
+          </Grid>
+          </Grid>
           </Box>
           <Box role="tabpanel" id="panel-bge" aria-labelledby="tab-bge" hidden={section !== 'bge'}>
           <Card variant="outlined" sx={{ mt: 3 }}><CardContent sx={{ p: 3 }}>

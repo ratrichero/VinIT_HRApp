@@ -65,3 +65,13 @@ test('route priority can be moved without changing or duplicating the original l
   assert.deepEqual(moveRoute(routes, 2, 1), routes);
   assert.deepEqual(moveRoute(routes, -1, 1), routes);
 });
+
+
+test('LLM cost display distinguishes unknown, free and very small estimates', () => {
+  const { formatUsd } = loadTypeScriptModule('src/lib/llmCost.ts');
+  assert.equal(formatUsd(null), '—');
+  assert.equal(formatUsd(0), '$0');
+  assert.equal(formatUsd('0.000000000001'), '$0.000000000001');
+  assert.equal(formatUsd('0.450000000000'), '$0.45');
+  assert.equal(formatUsd('invalid'), '—');
+});

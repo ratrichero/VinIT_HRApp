@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -52,6 +53,9 @@ class AIConfigUpdateRequest(BaseModel):
     api_base: str = Field(min_length=1, max_length=500)
     api_key: str | None = Field(default=None, max_length=500, repr=False)
     temperature_default: float = Field(default=0.1, ge=0, le=1)
+    input_price_per_million_usd: Decimal | None = Field(default=None, ge=0, le=1000000, max_digits=18, decimal_places=6, allow_inf_nan=False)
+    output_price_per_million_usd: Decimal | None = Field(default=None, ge=0, le=1000000, max_digits=18, decimal_places=6, allow_inf_nan=False)
+    reuse_config_id: UUID | None = None
     fallback_config_ids: list[UUID] = Field(default_factory=list, max_length=3)
     fallback_destinations_approved: bool = False
 
@@ -181,13 +185,14 @@ def _validate_choice(runtime: dict, *, require_provider_name: bool = False) -> d
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
-def _stored_key_config_id_for_endpoint(db, runtime: dict) -> str | None:
-    """Return the ACTIVE config whose stored key may be reused for this URL."""
+def _stored_key_config_id_for_endpoint(db, runtime: dict, reuse_config_id: str | None = None) -> str | None:
+    """Reuse a selected version (or ACTIVE) only for its exact canonical URL."""
     active = db.execute(text("""
         SELECT config_id, api_base, api_key_ciphertext
         FROM app_private.ai_configuration_versions
-        WHERE status = 'ACTIVE' LIMIT 1
-    """)).mappings().first()
+        WHERE provider = 'compatible' AND ((CAST(:id AS uuid) IS NOT NULL AND config_id = CAST(:id AS uuid))
+           OR (CAST(:id AS uuid) IS NULL AND status = 'ACTIVE')) LIMIT 1
+    """), {"id": reuse_config_id}).mappings().first()
     if not active or not active["api_key_ciphertext"] or not active["api_base"]:
         return None
     try:
@@ -231,7 +236,7 @@ async def list_ai_configs(current_user: dict = Depends(require_admin_role)):
         rows = db.execute(text("""
             SELECT config_id, provider, provider_name, model_name, deployment_mode, api_base,
                    temperature_default, status, created_by, created_at, enabled_at, disabled_at,
-                   fallback_config_ids,
+                   input_price_per_million_usd, output_price_per_million_usd, fallback_config_ids,
                    (api_key_ciphertext IS NOT NULL) AS api_key_configured, api_key_hint
             FROM app_private.ai_configuration_versions ORDER BY created_at DESC, config_id DESC LIMIT 100
         """)).mappings().all()
@@ -240,10 +245,36 @@ async def list_ai_configs(current_user: dict = Depends(require_admin_role)):
         db.close()
 
 
+@router.get("/ai/usage-summary")
+async def get_llm_usage_summary(current_user: dict = Depends(require_admin_role)):
+    db = SessionLocal()
+    try:
+        row = db.execute(text("""
+            SELECT count(*) AS attempts, count(estimated_cost_usd) AS priced_attempts,
+                   count(*) FILTER (WHERE estimated_cost_usd IS NULL) AS unpriced_attempts,
+                   sum(estimated_cost_usd) AS estimated_usd,
+                   min(created_at) AS first_observed_at, max(created_at) AS last_observed_at
+            FROM app_private.llm_usage_attempts
+        """)).mappings().one()
+        grouped = db.execute(text("""
+            SELECT config_id, provider, model_name, count(*) AS attempts,
+                   count(estimated_cost_usd) AS priced_attempts,
+                   count(*) FILTER (WHERE estimated_cost_usd IS NULL) AS unpriced_attempts,
+                   sum(estimated_cost_usd) AS estimated_usd
+            FROM app_private.llm_usage_attempts
+            GROUP BY config_id, provider, model_name
+            ORDER BY max(created_at) DESC LIMIT 50
+        """)).mappings().all()
+        return {**dict(row), "by_config": [dict(item) for item in grouped]}
+    finally:
+        db.close()
+
+
 @router.post("/ai/config", status_code=201)
 async def create_ai_config(request: AIConfigUpdateRequest, current_user: dict = Depends(require_admin_role)):
     submitted = request.model_dump()
     api_key = submitted.pop("api_key")
+    reuse_config_id = submitted.pop("reuse_config_id")
     fallback_ids = [str(value) for value in submitted.pop("fallback_config_ids")]
     approved = submitted.pop("fallback_destinations_approved")
     if fallback_ids and not approved:
@@ -275,30 +306,23 @@ async def create_ai_config(request: AIConfigUpdateRequest, current_user: dict = 
         _lock_active_admin(db, current_user["user_id"])
         _validate_llm_fallbacks(db, fallback_ids)
         if runtime["provider"] == "compatible" and api_key is None:
-            # Reuse is endpoint-bound: changing only the provider display name,
-            # model or temperature at the same Base URL must not force the
-            # Admin to retype a key, and the key is never copied to a new URL.
-            active = db.execute(text("""
-                SELECT api_base, api_key_ciphertext, api_key_hint
-                FROM app_private.ai_configuration_versions
-                WHERE status = 'ACTIVE' LIMIT 1
-            """)).mappings().first()
-            if active and active["api_key_ciphertext"] and active["api_base"]:
-                try:
-                    same_endpoint = canonical_endpoint(active["api_base"]) == runtime["api_base"]
-                except AIConfigError:
-                    same_endpoint = False
-                if same_endpoint:
-                    api_key_ciphertext = active["api_key_ciphertext"]
-                    stored_hint = active["api_key_hint"]
+            reusable_id = _stored_key_config_id_for_endpoint(db, runtime, str(reuse_config_id) if reuse_config_id else None)
+            if reuse_config_id and not reusable_id:
+                raise HTTPException(status_code=400, detail="Không thể dùng lại khóa cho Base URL này")
+            if reusable_id:
+                active = db.execute(text("""
+                    SELECT api_key_ciphertext, api_key_hint FROM app_private.ai_configuration_versions
+                    WHERE config_id = :id
+                """), {"id": reusable_id}).mappings().one()
+                api_key_ciphertext, stored_hint = active["api_key_ciphertext"], active["api_key_hint"]
         row = db.execute(text("""
             INSERT INTO app_private.ai_configuration_versions
                 (provider, provider_name, model_name, deployment_mode, api_base,
-                 temperature_default, api_key_ciphertext, api_key_hint, fallback_config_ids, created_by, status)
+                 temperature_default, input_price_per_million_usd, output_price_per_million_usd, api_key_ciphertext, api_key_hint, fallback_config_ids, created_by, status)
             VALUES (:provider, :provider_name, :model_name, :provider, :api_base,
-                    :temperature_default, :api_key_ciphertext, :api_key_hint, CAST(:fallback_ids AS jsonb), :user_id, 'DRAFT')
+                    :temperature_default, :input_price_per_million_usd, :output_price_per_million_usd, :api_key_ciphertext, :api_key_hint, CAST(:fallback_ids AS jsonb), :user_id, 'DRAFT')
             RETURNING config_id, provider, provider_name, model_name, api_base,
-                      temperature_default, status, created_at, fallback_config_ids,
+                      temperature_default, input_price_per_million_usd, output_price_per_million_usd, status, created_at, fallback_config_ids,
                       (api_key_ciphertext IS NOT NULL) AS api_key_configured, api_key_hint
         """), {**runtime, "api_key_ciphertext": api_key_ciphertext,
                "api_key_hint": stored_hint, "fallback_ids": json.dumps(fallback_ids),
@@ -323,6 +347,7 @@ async def test_ai_connection(request: AIConfigUpdateRequest, current_user: dict 
     api_key = submitted.pop("api_key")
     submitted.pop("fallback_config_ids")
     submitted.pop("fallback_destinations_approved")
+    reuse_config_id = submitted.pop("reuse_config_id")
     runtime = _validate_choice(
         submitted,
         require_provider_name=submitted["provider"] == "compatible",
@@ -344,9 +369,20 @@ async def test_ai_connection(request: AIConfigUpdateRequest, current_user: dict 
             except AISecretError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from None
         elif runtime["provider"] == "compatible":
-            reusable_config_id = _stored_key_config_id_for_endpoint(db, runtime)
+            reusable_config_id = _stored_key_config_id_for_endpoint(db, runtime, str(reuse_config_id) if reuse_config_id else None)
+            if reuse_config_id and not reusable_config_id:
+                raise HTTPException(status_code=400, detail="Không thể dùng lại khóa cho Base URL này")
             if reusable_config_id:
-                runtime["config_id"] = reusable_config_id
+                try:
+                    stored = get_runtime_by_id(db, reusable_config_id, include_secret=True)
+                except AIConfigError:
+                    raise HTTPException(status_code=503, detail="Không thể đọc khóa API đã lưu") from None
+                if not stored or not stored.get("api_key"):
+                    raise HTTPException(status_code=503, detail="Không thể đọc khóa API đã lưu")
+                # A connection test may try a new model at the same endpoint;
+                # use the endpoint-bound key without presenting it as a pinned
+                # snapshot of the old model.
+                runtime["api_key"] = stored["api_key"]
                 runtime["api_key_configured"] = True
     finally:
         db.close()

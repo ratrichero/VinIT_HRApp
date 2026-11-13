@@ -176,6 +176,7 @@ def environment_runtime() -> dict[str, Any]:
             "provider_name": settings.LLM_PROVIDER_NAME,
             "model_name": settings.LLM_MODEL_NAME, "api_base": settings.LLM_API_BASE,
             "temperature_default": settings.LLM_TEMPERATURE_DEFAULT,
+            "input_price_per_million_usd": None, "output_price_per_million_usd": None,
             "api_key_configured": bool(settings.LLM_API_KEY), "api_key_hint": None}
 
 
@@ -185,7 +186,9 @@ def _database_runtime(row, *, include_secret: bool = True) -> dict[str, Any]:
                "provider_name": row.get("provider_name"),
                "model_name": row["model_name"], "api_base": row["api_base"],
                "temperature_default": float(row["temperature_default"]) if row["temperature_default"] is not None else None,
-               "api_key_configured": bool(ciphertext), "api_key_hint": row.get("api_key_hint")}
+               "api_key_configured": bool(ciphertext), "api_key_hint": row.get("api_key_hint"),
+               "input_price_per_million_usd": float(row["input_price_per_million_usd"]) if row.get("input_price_per_million_usd") is not None else None,
+               "output_price_per_million_usd": float(row["output_price_per_million_usd"]) if row.get("output_price_per_million_usd") is not None else None}
     if ciphertext and include_secret:
         try:
             runtime["api_key"] = decrypt_api_key(ciphertext)
@@ -197,7 +200,7 @@ def _database_runtime(row, *, include_secret: bool = True) -> dict[str, Any]:
 def get_runtime_by_id(db, config_id: str, *, include_secret: bool = True) -> dict[str, Any] | None:
     row = db.execute(text("""
         SELECT config_id, provider, provider_name, model_name, api_base, temperature_default,
-               api_key_ciphertext, api_key_hint
+               input_price_per_million_usd, output_price_per_million_usd, api_key_ciphertext, api_key_hint
         FROM app_private.ai_configuration_versions WHERE config_id = :config_id
     """), {"config_id": str(config_id)}).mappings().first()
     return _database_runtime(row, include_secret=include_secret) if row else None
@@ -206,7 +209,7 @@ def get_runtime_by_id(db, config_id: str, *, include_secret: bool = True) -> dic
 def get_active_runtime(db, *, include_secret: bool = False) -> dict[str, Any]:
     row = db.execute(text("""
         SELECT config_id, provider, provider_name, model_name, api_base, temperature_default,
-               api_key_ciphertext, api_key_hint, fallback_config_ids
+               input_price_per_million_usd, output_price_per_million_usd, api_key_ciphertext, api_key_hint, fallback_config_ids
         FROM app_private.ai_configuration_versions WHERE status = 'ACTIVE'
         ORDER BY enabled_at DESC NULLS LAST LIMIT 1
     """)).mappings().first()

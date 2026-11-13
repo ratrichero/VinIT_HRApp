@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from pydantic import BaseModel, Field, ValidationError
 from app.services import langfuse_observability as observability
+from app.services.llm_usage import record_attempt
 from app.services.redaction import redact_payload, redact_professional_profile, redact_text
 from app.services.ai_config import (
     AIConfigError, canonical_endpoint, get_active_runtime, hydrate_runtime_secret,
@@ -336,6 +337,9 @@ class LLMClient:
         if len(routes) > 4 or any(not isinstance(route, dict) for route in routes):
             raise LLMError("Invalid LLM fallback configuration")
         for index, route in enumerate(routes):
+            if metadata_out is not None:
+                for key in ("token_usage", "provider_returned_model", "system_fingerprint"):
+                    metadata_out.pop(key, None)
             token = runtime_context.set(route)
             try:
                 result = await self._call_llm_one(
@@ -470,10 +474,13 @@ class LLMClient:
             version=prompt_version,
             input_data=payload["messages"],
         ) as generation:
+            attempted = False
+            recorded = False
             try:
                 # Environment proxy variables must not silently reroute CV text to
                 # a third party after the endpoint policy has checked a private host.
                 async with httpx.AsyncClient(timeout=120, trust_env=False) as client:
+                    attempted = True
                     response = await client.post(
                         f"{base_url.rstrip('/')}/chat/completions",
                         json=payload,
@@ -481,6 +488,8 @@ class LLMClient:
                     )
                     response.raise_for_status()
                     data = response.json()
+                    recorded = True
+                    record_attempt(runtime, task_name, True, data)
                     usage_details = _usage_details(data)
                     if metadata_out is not None:
                         metadata_out.update({
@@ -512,6 +521,9 @@ class LLMClient:
             except Exception as e:
                 logger.error("Unexpected error calling LLM", error_type=type(e).__name__)
                 raise LLMError("LLM call failed") from None
+            finally:
+                if attempted and not recorded:
+                    record_attempt(runtime, task_name, False)
 
     async def extract_criteria_from_jd(
         self,

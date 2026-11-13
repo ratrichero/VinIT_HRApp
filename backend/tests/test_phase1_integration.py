@@ -2586,3 +2586,72 @@ def test_cloudflare_reranker_controls_are_explicit_audited_and_fail_closed(clien
     with engine.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='ENABLE_RERANKER' AND object_id=:id"), {'id': enabled.json()['selection_id']}).scalar_one() == 1
         assert conn.execute(text("SELECT count(*) FROM app_private.audit_events WHERE action_type='DISABLE_RERANKER' AND actor_user_id=:id"), {'id': seed['other']}).scalar_one() == 1
+
+
+def test_llm_prices_clone_pinning_and_estimated_usage(client, seed, monkeypatch):
+    from cryptography.fernet import Fernet
+    from app.core.config import settings
+    from app.db.database import SessionLocal
+    from app.services.ai_config import get_runtime_by_id
+    from app.services.llm_usage import record_attempt
+    monkeypatch.setattr(settings, 'AI_CONFIG_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, 'ALLOW_EXTERNAL_API', True)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id,role_code) VALUES (:id,'ADMIN')"), {'id': seed['other']})
+        assert not conn.execute(text("SELECT has_table_privilege('authenticated','app_private.llm_usage_attempts','SELECT')")).scalar_one()
+        assert not conn.execute(text("SELECT has_table_privilege('service_role','app_private.llm_usage_attempts','DELETE')")).scalar_one()
+    admin = headers(seed['other'])
+    body = {'provider': 'compatible', 'provider_name': 'Synthetic', 'model_name': 'test',
+            'api_base': 'https://example.test/v1', 'api_key': 'synthetic-secret',
+            'input_price_per_million_usd': '0.15', 'output_price_per_million_usd': '0.6'}
+    original = client.post('/v1/admin/ai/config', headers=admin, json=body)
+    assert original.status_code == 201, original.text
+    oid = original.json()['config_id']
+    assert 'synthetic-secret' not in original.text
+    assert client.get('/v1/admin/ai/usage-summary', headers=headers(seed['hr'])).status_code == 403
+    assert client.post('/v1/admin/ai/config', headers=admin, json={**body, 'input_price_per_million_usd': '-1'}).status_code == 422
+    clone_body = {**body, 'api_key': None, 'reuse_config_id': oid, 'model_name': 'new-model', 'input_price_per_million_usd': '2'}
+    clone = client.post('/v1/admin/ai/config', headers=admin, json=clone_body)
+    assert clone.status_code == 201, clone.text
+    assert clone.json()['api_key_configured']
+    from app.services.llm_client import llm_client
+    seen = []
+    async def fake_connection(runtime):
+        seen.append(runtime)
+        return {'ok': True, 'message': 'synthetic'}
+    monkeypatch.setattr(llm_client, 'test_provider_connection', fake_connection)
+    tested = client.post('/v1/admin/ai/test-connection', headers=admin, json=clone_body)
+    assert tested.status_code == 200 and tested.json()['ok']
+    assert seen[0]['api_key'] == 'synthetic-secret' and seen[0]['model_name'] == 'new-model'
+    assert 'synthetic-secret' not in tested.text
+    assert client.post('/v1/admin/ai/test-connection', headers=admin, json={**clone_body, 'api_base': 'https://different.test/v1'}).status_code == 400
+    denied = client.post('/v1/admin/ai/config', headers=admin, json={**clone_body, 'api_base': 'https://different.test/v1'})
+    assert denied.status_code == 400
+    primary = client.post('/v1/admin/ai/config', headers=admin, json={**clone_body, 'fallback_config_ids': [oid], 'fallback_destinations_approved': True})
+    assert primary.status_code == 201, primary.text
+    assert client.post('/v1/admin/ai/config/' + primary.json()['config_id'] + '/enable', headers=admin).status_code == 200
+    from app.services.ai_config import get_active_runtime, runtime_snapshot
+    import json
+    db = SessionLocal()
+    try:
+        pinned = runtime_snapshot(get_active_runtime(db))
+        assert pinned['input_price_per_million_usd'] == 2
+        assert pinned['fallbacks'][0]['input_price_per_million_usd'] == .15
+        assert 'synthetic-secret' not in json.dumps(pinned)
+        old = get_runtime_by_id(db, oid, include_secret=False)
+        newer = get_runtime_by_id(db, clone.json()['config_id'], include_secret=False)
+        assert old['input_price_per_million_usd'] == .15 and newer['input_price_per_million_usd'] == 2
+    finally:
+        db.close()
+    before = client.get('/v1/admin/ai/usage-summary', headers=admin).json()
+    record_attempt(old, 'synthetic-test', True, {'usage': {'prompt_tokens': 1000000, 'completion_tokens': 500000}})
+    record_attempt(newer, 'synthetic-test', False)
+    after = client.get('/v1/admin/ai/usage-summary', headers=admin).json()
+    assert after['attempts'] == before['attempts'] + 2
+    assert after['priced_attempts'] == before['priced_attempts'] + 1
+    assert after['unpriced_attempts'] == before['unpriced_attempts'] + 1
+    from decimal import Decimal
+    assert Decimal(str(after['estimated_usd'])) - Decimal(str(before['estimated_usd'] or 0)) == Decimal('0.45')
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT estimated_cost_usd, input_price_per_million_usd, output_price_per_million_usd FROM app_private.llm_usage_attempts WHERE config_id=:id"), {'id': oid}).one()
+        assert row == (Decimal('0.45'), Decimal('0.15'), Decimal('0.6'))
