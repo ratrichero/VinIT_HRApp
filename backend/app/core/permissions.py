@@ -184,14 +184,16 @@ def can_update_application_status(user_id: str, position_id: str) -> bool:
         db.close()
 
 
-def application_access(user_id: str, position_id: str, application_id: str) -> dict:
+def application_access(user_id: str, position_id: str, application_id: str, db=None) -> dict:
     """Resolve access to a single candidate without granting all CVs to an HM.
 
     Recruiters on the position and global HR leads/admins have full access;
     everyone else needs an active share containing this application. CV access
     additionally requires the share's allow_cv_view flag.
     """
-    db = SessionLocal()
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
     try:
         row = db.execute(text("""
             SELECT
@@ -228,4 +230,5 @@ def application_access(user_id: str, position_id: str, application_id: str) -> d
                 "can_manage_hr_notes": bool(row["hr_notes_access"]),
                 "can_view_cv": bool(row["hr_access"] or row["shared_cv"])}
     finally:
-        db.close()
+        if own_session:
+            db.close()

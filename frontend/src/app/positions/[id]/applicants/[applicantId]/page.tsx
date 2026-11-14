@@ -89,6 +89,7 @@ export default function ApplicantDetailPage() {
   const [navigationContext, setNavigationContext] = useState<ApplicantNavigationContext | null>(null);
   const [cvUrl, setCvUrl] = useState<string | null>(null);
   const [cvError, setCvError] = useState<string | null>(null);
+  const [cvDownloading, setCvDownloading] = useState(false);
   const blobUrl = useRef<string | null>(null);
   const requestId = useRef(0);
 
@@ -108,21 +109,12 @@ export default function ApplicantDetailPage() {
       } else { setHistory([]); setHistoryError(null); }
       if (res.data.can_view_cv) {
         try {
-          const cvRes = await applicationsApi.getCvUrl(applicantId);
+          const file = await applicationsApi.getCvBlob(applicantId);
           if (currentRequest !== requestId.current) return;
           if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null; }
           setCvError(null);
-          if (typeof cvRes.data.signed_url === 'string') {
-            setCvUrl(cvRes.data.signed_url);
-          } else if (cvRes.data.source === 'local') {
-            const file = await applicationsApi.getCvBlob(applicantId);
-            if (currentRequest !== requestId.current) return;
-            blobUrl.current = URL.createObjectURL(file.data);
-            setCvUrl(blobUrl.current);
-          } else {
-            setCvUrl(null);
-            setCvError(t("Không thể lấy đường dẫn CV."));
-          }
+          blobUrl.current = URL.createObjectURL(file.data);
+          setCvUrl(blobUrl.current);
         } catch {
           if (currentRequest === requestId.current) { setCvUrl(null); setCvError(t("Không thể tải CV gốc. Vui lòng thử lại sau.")); }
         }
@@ -148,6 +140,30 @@ export default function ApplicantDetailPage() {
     setSelectedEvidenceId(null);
     setSelectedPage(1);
   }, [positionId, applicantId]);
+
+  const handleDownloadCv = async () => {
+    if (cvDownloading) return;
+    setCvDownloading(true);
+    try {
+      // A download is a separate authorized/audited request, not the preview blob.
+      const file = await applicationsApi.getCvBlob(applicantId);
+      const url = URL.createObjectURL(file.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = application?.documents?.[0]?.original_filename || 'cv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setCvError(null);
+    } catch (err: any) {
+      if (err.response?.status === 403 || err.response?.status === 404) {
+        if (blobUrl.current) { URL.revokeObjectURL(blobUrl.current); blobUrl.current = null; }
+        setCvUrl(null);
+      }
+      setCvError(t("Không thể tải CV gốc. Vui lòng thử lại sau."));
+    } finally { setCvDownloading(false); }
+  };
 
   const handleStatusUpdate = async () => {
     if (!newStatus || statusSubmitting) return;
@@ -337,10 +353,8 @@ export default function ApplicantDetailPage() {
           <Button
             variant="outlined"
             startIcon={<GetAppIcon />}
-            href={cvUrl || '#'}
-            target="_blank"
-            rel="noreferrer"
-            disabled={!cvUrl}
+            onClick={handleDownloadCv}
+            disabled={!cvUrl || cvDownloading}
             sx={{ borderColor: '#0A2B57', color: '#0A2B57' }}
           >{t("Tải CV gốc")}</Button>
           {application.can_update_status && nextStatuses.length > 0 && (
@@ -370,6 +384,7 @@ export default function ApplicantDetailPage() {
         </Box>
       </Box>
 
+      {cvError && <Alert severity="error" sx={{ mb: 2 }}>{t(cvError)}</Alert>}
       {assessment?.evidence_coverage != null && assessment.evidence_coverage < 0.7 && (
         <Alert severity="warning" sx={{ mb: 2 }}>{t("Chưa đủ dữ liệu để xếp hạng ổn định. Điểm chỉ mang tính tham khảo; HR cần kiểm tra bằng chứng trước khi quyết định.")}</Alert>
       )}

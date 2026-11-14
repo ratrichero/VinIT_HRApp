@@ -299,9 +299,12 @@ async def add_shortlist_feedback(share_id: UUID, request: ShortlistFeedbackReque
 
 
 @router.post("/{share_id}/revoke")
-async def revoke_shortlist(share_id: UUID, current_user: dict = Depends(get_current_user)):
+def revoke_shortlist(share_id: UUID, current_user: dict = Depends(get_current_user)):
     db = SessionLocal()
     try:
+        share = _get_share(db, str(share_id), current_user["user_id"])
+        db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id=:id FOR UPDATE"),
+                   {"id": str(share["position_id"])})
         share = _get_share(db, str(share_id), current_user["user_id"], lock=True)
         if not can_update_application_status(current_user["user_id"], str(share["position_id"])):
             raise HTTPException(status_code=403, detail="Chỉ HR phụ trách mới có thể thu hồi shortlist")

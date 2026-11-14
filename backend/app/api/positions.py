@@ -349,7 +349,7 @@ async def get_hiring_managers(position_id: UUID, current_user: dict = Depends(ge
 
 
 @router.put("/{position_id}/hiring-manager")
-async def change_hiring_manager(position_id: UUID, request: HiringManagerChange,
+def change_hiring_manager(position_id: UUID, request: HiringManagerChange,
                                 current_user: dict = Depends(get_current_user)):
     """Transfer the position's HM assignment and revoke previous HM shares atomically."""
     actor, target, position = str(current_user["user_id"]), str(request.hiring_manager_user_id), str(position_id)

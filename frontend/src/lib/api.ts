@@ -144,7 +144,6 @@ export const applicationsApi = {
   reprocess: (id: string) => apiClient.post(`/applications/${id}/reprocess`),
   updateStatus: (id: string, newStatus: string, reason?: string, note?: string) =>
     apiClient.patch(`/applications/${id}/status`, { new_status: newStatus, reason, note }),
-  getCvUrl: (id: string) => apiClient.get(`/applications/${id}/cv-download-url`),
   getCvBlob: (id: string) => apiClient.get(`/applications/${id}/cv-file`, { responseType: 'blob' }),
 };
 

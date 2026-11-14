@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
+from fastapi.responses import Response
 from typing import List, Optional
 from uuid import UUID, uuid4
-from app.core.security import get_current_user
+from app.core.security import ensure_token_is_current, get_current_user
 from app.core.permissions import (
     application_access, can_update_application_status, check_position_access, is_system_admin,
 )
@@ -19,9 +19,6 @@ from app.schemas.applications import (
     ApplicationWithAssessment,
     ApplicationStatus,
     ApplicationStatusUpdate,
-    CVBatch,
-    CVUploadItem,
-    FileProcessingStatus,
 )
 from app.schemas.common import OperationResponse
 from app.db.supabase import get_supabase_client
@@ -31,6 +28,7 @@ from app.services.document_processor import document_processor
 import os
 import json
 import aiofiles
+from urllib.parse import quote
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -517,13 +515,14 @@ async def update_application_status(
 
 
 def _authorized_cv_document(application_id: UUID, user_id: str) -> dict:
+    """Initial authorization and metadata lookup; not sufficient to release bytes."""
     app_id = str(application_id)
     db = SessionLocal()
     try:
         app = db.execute(text("SELECT position_id FROM app_private.applications WHERE application_id = :id"), {"id": app_id}).mappings().first()
         if not app:
             raise NotFoundError("Application")
-        if not application_access(user_id, str(app["position_id"]), app_id)["can_view_cv"]:
+        if not application_access(user_id, str(app["position_id"]), app_id, db=db)["can_view_cv"]:
             raise HTTPException(status_code=403, detail="Shortlist này không cho phép xem CV gốc")
         doc = db.execute(text("""
             SELECT * FROM app_private.application_documents WHERE application_id = :id AND document_type = 'CV'
@@ -531,48 +530,102 @@ def _authorized_cv_document(application_id: UUID, user_id: str) -> dict:
         """), {"id": app_id}).mappings().first()
         if not doc:
             raise NotFoundError("CV document")
-        return dict(doc)
+        return {**dict(doc), "position_id": str(app["position_id"])}
     finally:
         db.close()
 
 
 @router.get("/{application_id}/cv-download-url")
-async def get_cv_signed_url(application_id: UUID, current_user: dict = Depends(get_current_user)):
-    """Give authorized users a short-lived URL or a local authenticated file path."""
+def get_cv_signed_url(application_id: UUID, response: Response, current_user: dict = Depends(get_current_user)):
+    """Legacy discovery endpoint. Never issues a storage bearer URL.
+
+    `source=local` is retained for older frontends and means the authenticated
+    backend path, not where the object is stored. It is not itself access to CV bytes.
+    """
     doc = _authorized_cv_document(application_id, current_user["user_id"])
-    if settings.STORAGE_BACKEND == "local":
-        return {"file_url": f"{settings.API_V1_PREFIX}/applications/{application_id}/cv-file",
-                "filename": doc["original_filename"], "source": "local"}
-    if settings.STORAGE_BACKEND != "supabase":
-        raise HTTPException(status_code=500, detail="Storage backend is not configured")
-    try:
-        supabase = get_supabase_client()
-        if not supabase:
-            raise HTTPException(status_code=503, detail="Supabase storage is not configured")
-        signed = supabase.storage.from_(doc["bucket"]).create_signed_url(path=doc["storage_path"], expires_in=600)
-        url = (signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")) if isinstance(signed, dict) else signed
-        if not isinstance(url, str) or not url:
-            raise HTTPException(status_code=502, detail="Could not generate file access URL")
-        return {"signed_url": url, "filename": doc["original_filename"], "source": "supabase"}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Failed to generate file access URL", error_type=type(exc).__name__)
-        raise HTTPException(status_code=502, detail="Could not generate file access URL")
+    response.headers["Cache-Control"] = "private, no-store, max-age=0"
+    return {"file_url": f"{settings.API_V1_PREFIX}/applications/{application_id}/cv-file",
+            "filename": doc["original_filename"], "source": "local"}
 
 
 @router.get("/{application_id}/cv-file")
-async def serve_cv_file(application_id: UUID, current_user: dict = Depends(get_current_user)):
-    """Serve an authorized local CV without exposing its filesystem path."""
-    if settings.STORAGE_BACKEND != "local":
-        raise HTTPException(status_code=400, detail="Local file serving is only available with local storage backend")
-    doc = _authorized_cv_document(application_id, current_user["user_id"])
+def serve_cv_file(application_id: UUID, current_user: dict = Depends(get_current_user)):
+    """Fetch privately, reauthorize under the position lock, then audit before release.
+
+    A successful audit records authorization to serve bytes, not proof that a
+    browser actually received or viewed them. Bytes already released cannot be
+    retracted. Storage I/O happens before acquiring the position lock.
+    """
+    user_id, app_id = str(current_user["user_id"]), str(application_id)
+    doc = _authorized_cv_document(application_id, user_id)
     if doc["bucket"] != settings.SUPABASE_STORAGE_BUCKET_CV:
         raise HTTPException(status_code=400, detail="Invalid file location")
-    base_storage_dir = os.path.realpath(os.path.join(settings.LOCAL_STORAGE_PATH, settings.SUPABASE_STORAGE_BUCKET_CV))
-    file_path = os.path.realpath(os.path.join(base_storage_dir, doc["storage_path"]))
-    if not file_path.startswith(base_storage_dir + os.sep):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-    if not os.path.isfile(file_path):
-        raise NotFoundError("CV file")
-    return FileResponse(path=file_path, filename=os.path.basename(doc["original_filename"]), media_type=doc["mime_type"])
+    if doc["size_bytes"] > settings.MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=413, detail="CV file exceeds size limit")
+    if settings.STORAGE_BACKEND == "local":
+        base = os.path.realpath(os.path.join(settings.LOCAL_STORAGE_PATH, settings.SUPABASE_STORAGE_BUCKET_CV))
+        path = os.path.realpath(os.path.join(base, doc["storage_path"]))
+        if not path.startswith(base + os.sep):
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        try:
+            with open(path, "rb") as stream:
+                content = stream.read(settings.MAX_FILE_SIZE_BYTES + 1)
+        except FileNotFoundError:
+            raise NotFoundError("CV file") from None
+        except OSError as exc:
+            logger.error("Could not read CV file", error_type=type(exc).__name__)
+            raise HTTPException(status_code=502, detail="Could not retrieve CV file") from None
+    elif settings.STORAGE_BACKEND == "supabase":
+        storage = get_supabase_client()
+        if not storage:
+            raise HTTPException(status_code=503, detail="Supabase storage is not configured")
+        try:
+            content = storage.storage.from_(doc["bucket"]).download(doc["storage_path"])
+        except Exception as exc:
+            logger.error("Could not retrieve CV file", error_type=type(exc).__name__)
+            raise HTTPException(status_code=502, detail="Could not retrieve CV file") from None
+    else:
+        raise HTTPException(status_code=500, detail="Storage backend is not configured")
+    if not isinstance(content, bytes) or len(content) > settings.MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=502, detail="Invalid CV file response")
+
+    db = SessionLocal()
+    try:
+        from app.services.retention import position_has_inflight_purge
+        if not db.execute(text("SELECT 1 FROM app_private.positions WHERE position_id=:id FOR UPDATE"), {"id": doc["position_id"]}).first():
+            raise NotFoundError("Position")
+        account = db.execute(text("""
+            SELECT account_status, must_change_password, tokens_valid_after FROM app_private.user_profiles
+            WHERE user_id=:id FOR SHARE
+        """), {"id": user_id}).mappings().first()
+        if not account or account["account_status"] != "ACTIVE" or account["must_change_password"]:
+            raise HTTPException(status_code=403, detail="Tài khoản chưa được kích hoạt hoặc đã bị khóa")
+        if current_user.get("token_payload") is not None:
+            ensure_token_is_current(current_user["token_payload"], account["tokens_valid_after"])
+        if position_has_inflight_purge(db, doc["position_id"]):
+            raise HTTPException(status_code=409, detail="Vị trí có case xóa đang xử lý hoặc cần phục hồi")
+        latest = db.execute(text("""
+            SELECT document_id FROM app_private.application_documents
+            WHERE application_id=:app_id AND document_type='CV'
+            ORDER BY created_at DESC, document_id DESC LIMIT 1
+        """), {"app_id": app_id}).scalar_one_or_none()
+        if str(latest) != str(doc["document_id"]):
+            raise HTTPException(status_code=409, detail="CV đã thay đổi. Vui lòng tải lại.")
+        if not application_access(user_id, doc["position_id"], app_id, db=db)["can_view_cv"]:
+            raise HTTPException(status_code=403, detail="Shortlist này không cho phép xem CV gốc")
+        db.execute(text("""
+            INSERT INTO app_private.audit_events (actor_user_id,action_type,object_type,object_id,position_id,outcome)
+            VALUES (:actor,'CV_FILE_ACCESS_GRANTED','APPLICATION',:app_id,:position,'SUCCESS')
+        """), {"actor": user_id, "app_id": app_id, "position": doc["position_id"]})
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    filename = os.path.basename(doc["original_filename"] or "cv")
+    return Response(content=content, media_type=doc["mime_type"], headers={
+        "Content-Disposition": "inline; filename*=UTF-8''" + quote(filename, safe=""),
+        "Cache-Control": "private, no-store, max-age=0", "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+    })

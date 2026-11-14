@@ -437,3 +437,7 @@ Sau mỗi batch, dev thực hiện phải bổ sung:
 ### Audit trước khi xem xét Phase 2 — vòng repository
 
 Xem `audit/PHASE1_AUDIT_BEFORE_PHASE2.md` (code audit `d30b681`): 322 backend tests pass trên PostgreSQL cục bộ dùng một lần; CI run `43368406759` pass 3 jobs. Phát hiện đáng chú ý: signed URL CV 600 giây không có thu hồi trong code sau revoke/đổi HM (chưa thử provider thật); API cấp link/đọc CV không ghi audit event ứng dụng trong probe mock. Đã chỉnh stale status trong tài liệu B và thêm migration 00022 vào hướng dẫn DB test. Các gate, E2E, pilot/gold, B7 và Phase 2 vẫn tạm dừng; không deploy hay tác động môi trường thật. Ngày hệ thống phiên khác đồng hồ sandbox/CI, cần Release owner đối chiếu trước ký.
+
+### Khắc phục AUD-P1-01/02 trong code
+
+Proxy CV có kiểm tra lại quyền sau fetch và audit `CV_FILE_ACCESS_GRANTED` trước khi trả bytes; không cấp signed URL mới. UI preview và nút tải dùng request backend xác thực, nút tải lấy lại dữ liệu thay vì dùng blob cũ. Test trên PostgreSQL disposable + Storage mock: bộ backend **331 passed**; frontend type-check/lint/i18n/unit/build đạt. Xem mục 6 `audit/PHASE1_AUDIT_BEFORE_PHASE2.md` cho giới hạn link đã cấp, file đã tải, mixed-version, audit của API khác và dung lượng bộ nhớ. Không thay dữ liệu/Supabase, không deploy, không E2E hay đóng gate.
