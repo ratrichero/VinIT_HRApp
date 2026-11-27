@@ -91,6 +91,9 @@ def test_rejects_source_in_another_family_with_the_same_error_as_missing(client,
         ops = _family(conn, 'ADMIN_OPERATIONS')
         _set_family(conn, seed['pos'], it)
         _set_family(conn, seed['pos2'], ops)
+        # Có JD đi nữa thì khác nhóm vẫn phải 404 — nếu không, test này chỉ đang
+        # kiểm "vị trí chưa có JD" chứ không kiểm ranh giới nhóm.
+        _add_jd(conn, seed['pos2'], 'JD của vị trí khác nhóm.', seed['hr2'])
 
     response = client.post(
         f"/v1/positions/{seed['pos']}/jd-template",
@@ -158,6 +161,8 @@ def test_response_carries_only_jd_text_not_candidate_data(client, seed):
         family = _family(conn)
         _set_family(conn, seed['pos'], family)
         _set_family(conn, seed['pos2'], family)
+        # seed chỉ tạo JD cho `pos`; vị trí nguồn cần có JD mới lấy được.
+        _add_jd(conn, seed['pos2'], 'JD nguồn để kiểm hình dạng phản hồi.', seed['hr2'])
 
     response = client.post(
         f"/v1/positions/{seed['pos']}/jd-template",
