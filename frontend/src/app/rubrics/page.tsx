@@ -8,7 +8,7 @@ import { localizeServerMessage } from '@/i18n/serverMessages';
 import { positionsApi, rubricApi } from '@/lib/api';
 import { purgeRubricDrafts, readDraft, removeDraft, rubricDraftKey, writeDraft } from '@/lib/localDrafts';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
-import { optionalRequirementSpec, rubricKeywords } from '@/lib/phase2Workflow';
+import { rubricKeywords } from '@/lib/phase2Workflow';
 import backendProposal from '@/data/rubric-proposal-it-backend.json';
 import RubricItemEditor, { CategoryHeader, groupTotal, type RubricItem } from '@/components/positions/RubricItemEditor';
 
@@ -35,7 +35,6 @@ export default function RubricsPage() {
   const [mandatory, setMandatory] = useState('70');
   const [nice, setNice] = useState('30');
   const [items, setItems] = useState<Item[]>([]);
-  const [specs, setSpecs] = useState<string[]>([]);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -69,7 +68,7 @@ export default function RubricsPage() {
    */
   const currentDraft = () => ({
     selected_id: selected?.template_version_id ?? null, creating,
-    family, title, level, mandatory, nice, items, specs, keywords,
+    family, title, level, mandatory, nice, items, keywords,
   });
 
   const applySnapshot = (d: any) => {
@@ -77,7 +76,6 @@ export default function RubricsPage() {
     setFamily(d.family || ''); setTitle(d.title || ''); setLevel(d.level || '');
     setMandatory(d.mandatory ?? '70'); setNice(d.nice ?? '30');
     setItems(Array.isArray(d.items) ? d.items : []);
-    setSpecs(Array.isArray(d.specs) ? d.specs : []);
     setKeywords(Array.isArray(d.keywords) ? d.keywords : []);
   };
 
@@ -92,7 +90,7 @@ export default function RubricsPage() {
     writeDraft(rubricDraftKey(), currentDraft());
     // currentDraft() đọc trực tiếp state; đưa từng field vào deps thay vì dùng
     // hàm để không lưu lại mỗi lần render vì một object mới.
-  }, [dirty, loading, selected, creating, family, title, level, mandatory, nice, items, specs, keywords]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dirty, loading, selected, creating, family, title, level, mandatory, nice, items, keywords]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Nháp cũ chưa lưu (đóng tab, mất điện) — hỏi khôi phục thay vì lặng lẽ bỏ.
   useEffect(() => {
@@ -130,7 +128,7 @@ export default function RubricsPage() {
 
   const populate = (v: Version) => {
     setSelected(v); setCreating(false); setMandatory(String(v.mandatory_weight_total)); setNice(String(v.nice_to_have_weight_total));
-    setItems(v.items); setSpecs(v.items.map(i => i.requirement_spec ? JSON.stringify(i.requirement_spec, null, 2) : '')); setKeywords(v.items.map(i => i.expected_evidence_keywords.join(', ')));  setDirty(false);
+    setItems(v.items); setKeywords(v.items.map(i => i.expected_evidence_keywords.join(', ')));  setDirty(false);
   };
   const select = async (id: string) => {
     if (dirty && !window.confirm(t('Bỏ các thay đổi chưa lưu?'))) return;
@@ -141,7 +139,7 @@ export default function RubricsPage() {
   const create = () => {
     setNotice('');
     if (dirty && !window.confirm(t('Bỏ các thay đổi chưa lưu?'))) return;
-    setSelected(null); setCreating(true); setFamily(families[0]?.job_family_id || ''); setTitle(''); setLevel(''); setMandatory('70'); setNice('30'); setItems([]); setSpecs([]); setKeywords([]); setError(''); setDirty(false);
+    setSelected(null); setCreating(true); setFamily(families[0]?.job_family_id || ''); setTitle(''); setLevel(''); setMandatory('70'); setNice('30'); setItems([]); setKeywords([]); setError(''); setDirty(false);
   };
   const openSuggest = async () => {
     if (dirty && !window.confirm(t('Bỏ các thay đổi chưa lưu?'))) return;
@@ -180,7 +178,6 @@ export default function RubricsPage() {
     setFamily(data.job_family_id); setTitle(data.title); setLevel('');
     setMandatory('70'); setNice('30');
     setItems((data.items as Item[]).map(item => ({ ...item, weight_in_group: item.weight_in_group ?? (item as any).weight })));
-    setSpecs((data.items as Item[]).map(item => item.requirement_spec ? JSON.stringify(item.requirement_spec, null, 2) : ''));
     setKeywords((data.items as Item[]).map(item => item.expected_evidence_keywords.join(', ')));
     setDirty(true);
   };
@@ -217,7 +214,6 @@ export default function RubricsPage() {
     setTitle(backendProposal.title); setLevel(backendProposal.level_band || '');
     setMandatory(String(backendProposal.mandatory_weight_total)); setNice(String(backendProposal.nice_to_have_weight_total));
     setItems(proposedItems.map(item => ({ ...item })));
-    setSpecs(proposedItems.map(item => item.requirement_spec ? JSON.stringify(item.requirement_spec, null, 2) : ''));
     setKeywords(proposedItems.map(item => item.expected_evidence_keywords.join(', ')));
     setError(''); setDirty(true);
   };
@@ -225,12 +221,15 @@ export default function RubricsPage() {
   const save = async () => {
     try {
       setBusy(true); setError('');
-      const payload = { mandatory_weight_total: Number(mandatory), nice_to_have_weight_total: Number(nice), items: items.map((item, i) => ({ ...item, expected_evidence_keywords: rubricKeywords(keywords[i]), weight_in_group: Number(item.weight_in_group), requirement_spec: optionalRequirementSpec(specs[i] || '') })) };
+      // requirement_spec nằm sẵn trong item (form chỉ sửa `kind`, giữ nguyên phần
+      // còn lại), nên không dựng lại từ chuỗi JSON nữa — đây từng là nguồn lỗi
+      // `JSON.parse` khi HR gõ sai một dấu phẩy.
+      const payload = { mandatory_weight_total: Number(mandatory), nice_to_have_weight_total: Number(nice), items: items.map((item, i) => ({ ...item, expected_evidence_keywords: rubricKeywords(keywords[i]), weight_in_group: Number(item.weight_in_group) })) };
       const result = creating ? await rubricApi.create({ ...payload, job_family_id: family, title, level_band: level || null }) : await rubricApi.update(selected!.template_version_id, { ...payload, expected_revision: selected!.revision });
       // Đã lên máy chủ thì nháp trong trình duyệt không còn là bản mới nhất.
       purgeRubricDrafts(); setRecovered(null);
       populate(result.data); await load();
-    } catch (err: any) { setError(err instanceof SyntaxError ? t('Requirement spec phải là JSON hợp lệ.') : (err.response?.data?.detail || t('Không thể lưu rubric.'))); }
+    } catch (err: any) { setError(err.response?.data?.detail || t('Không thể lưu rubric.')); }
     finally { setBusy(false); }
   };
   const act = async (action: 'publish' | 'clone') => {
@@ -488,14 +487,11 @@ export default function RubricsPage() {
                               item={item}
                               index={i}
                               keywords={keywords[i] || ''}
-                              spec={specs[i] || ''}
                               canEdit={canEdit}
                               onChange={patch => changeItem(i, patch)}
                               onKeywordsChange={value => { setKeywords(current => current.map((v, n) => n === i ? value : v)); setDirty(true); }}
-                              onSpecChange={value => { setSpecs(current => current.map((v, n) => n === i ? value : v)); setDirty(true); }}
                               onRemove={() => {
                                 setItems(current => current.filter((_, n) => n !== i));
-                                setSpecs(current => current.filter((_, n) => n !== i));
                                 setKeywords(current => current.filter((_, n) => n !== i));
                                 setDirty(true);
                               }}
@@ -508,11 +504,6 @@ export default function RubricsPage() {
                                 const target = siblings[at + direction];
                                 if (target === undefined) return;
                                 setItems(current => {
-                                  const next = [...current];
-                                  [next[i], next[target]] = [next[target], next[i]];
-                                  return next;
-                                });
-                                setSpecs(current => {
                                   const next = [...current];
                                   [next[i], next[target]] = [next[target], next[i]];
                                   return next;
@@ -543,7 +534,6 @@ export default function RubricsPage() {
                                 // Thêm vào ĐÚNG cột: nhóm của tiêu chí mới phải khớp cột
                                 // người dùng vừa bấm, không để họ thêm rồi phải đổi nhóm tay.
                                 setItems(current => [...current, { ...emptyItem(), category }]);
-                                setSpecs(current => [...current, '']);
                                 setKeywords(current => [...current, '']);
                                 setDirty(true);
                               }}

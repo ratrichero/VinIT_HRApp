@@ -2055,5 +2055,20 @@
   "đã xuất bản": "published",
   "Chưa có rubric nào. Dùng một trong các nút ở trên để tạo bản nháp đầu tiên.": "No rubrics yet. Use one of the buttons above to create the first draft.",
   "Rubric mới — đang soạn": "New rubric — editing",
-  "Chi tiết rubric": "Rubric details"
+  "Chi tiết rubric": "Rubric details",
+  "Ví dụ: Kinh nghiệm phát triển API": "e.g. Experience building APIs",
+  "Viết như giải thích cho đồng nghiệp: tiêu chí này đạt khi nào?": "Write it as you would explain to a colleague: when does this criterion pass?",
+  "Máy đọc tên và mô tả để tự suy ra cách so khớp. Không cần điền gì thêm.": "The engine reads the name and description to work out how to match. Nothing else to fill in.",
+  "Cách máy so khớp": "How to match",
+  "Chọn kiểu bằng chứng cần tìm trong CV.": "Pick the kind of evidence to look for in the CV.",
+  "Từ khoá bằng chứng": "Evidence keywords",
+  "Máy dò các từ này trong CV. Cách nhau bằng dấu phẩy, ví dụ: Python, FastAPI, PostgreSQL. Càng cụ thể càng tốt — tránh từ chung như \"kinh nghiệm\".": "The engine looks for these words in the CV. Separate with commas, e.g. Python, FastAPI, PostgreSQL. The more specific the better — avoid generic words like \"experience\".",
+  "Từ khoá bằng chứng là gì?": "What are evidence keywords?",
+  "Python, FastAPI, PostgreSQL": "Python, FastAPI, PostgreSQL",
+  "Xoá tiêu chí": "Delete criterion",
+  "Tuỳ chọn nâng cao": "Advanced options",
+  "Dặn người đọc bằng chứng": "Note for whoever reads the evidence",
+  "Ví dụ: tìm tên dự án và số năm trong phần kinh nghiệm, không cộng trùng các giai đoạn chồng lấp.": "e.g. look for project names and years in the experience section; do not double-count overlapping periods.",
+  "Hiện ở trang chấm điểm để người đọc biết cần tìm gì. Không ảnh hưởng điểm số.": "Shown on the scoring page so the reader knows what to look for. Does not affect the score.",
+  "Kỹ năng hoặc công nghệ": "Skill or technology"
 }
