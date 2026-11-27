@@ -30,6 +30,40 @@ const position = {
   created_at: '2026-10-01T08:00:00Z',
 };
 
+/**
+ * Rubric mẫu để XEM bố cục thư viện: bản nháp có tiêu chí ở cả hai nhóm và
+ * trọng số mỗi nhóm cộng đúng 100, nên trạng thái hiển thị là "hợp lệ để xuất
+ * bản". Dùng cho việc xem giao diện, không phải test tự động.
+ */
+const rubricTemplates = [{
+  template_version_id: 'rv1', template_id: 'rt1', version_number: 1, revision: 1,
+  status: 'DRAFT', title: 'Backend Engineer (Python) — chuẩn IT & Digital',
+  job_family_id: 'f1', family_name: 'IT & Digital', level_band: 'Mid–Senior',
+  created_by: 'u-admin', mandatory_weight_total: 70, nice_to_have_weight_total: 30,
+  items: [
+    { template_item_id: 'ri1', name: 'Kinh nghiệm Python backend', category: 'MUST_HAVE',
+      description: 'Tối thiểu 4 năm xây dịch vụ backend bằng Python trong môi trường production.',
+      weight_in_group: 40, expected_evidence_keywords: ['Python', 'FastAPI', 'Django'],
+      evidence_guidance: 'Tìm tên dự án và số năm trong phần kinh nghiệm.', requirement_spec: null },
+    { template_item_id: 'ri2', name: 'Thiết kế cơ sở dữ liệu quan hệ', category: 'MUST_HAVE',
+      description: 'Thành thạo thiết kế schema, viết truy vấn tối ưu và migration an toàn.',
+      weight_in_group: 35, expected_evidence_keywords: ['PostgreSQL', 'SQL', 'migration'],
+      evidence_guidance: null, requirement_spec: null },
+    { template_item_id: 'ri3', name: 'Kinh nghiệm vận hành production', category: 'MUST_HAVE',
+      description: 'Đã trực tiếp xử lý sự cố hệ thống đang chạy thật.',
+      weight_in_group: 25, expected_evidence_keywords: ['on-call', 'monitoring', 'incident'],
+      evidence_guidance: null, requirement_spec: null },
+    { template_item_id: 'ri4', name: 'Kinh nghiệm Kubernetes', category: 'NICE_TO_HAVE',
+      description: 'Triển khai và vận hành workload trên Kubernetes.',
+      weight_in_group: 60, expected_evidence_keywords: ['Kubernetes', 'Helm', 'Docker'],
+      evidence_guidance: null, requirement_spec: null },
+    { template_item_id: 'ri5', name: 'Kinh nghiệm mentoring', category: 'NICE_TO_HAVE',
+      description: 'Đã hướng dẫn lập trình viên ít kinh nghiệm hơn.',
+      weight_in_group: 40, expected_evidence_keywords: ['mentoring', 'review code'],
+      evidence_guidance: null, requirement_spec: null },
+  ],
+}];
+
 const jdV1 = {
   jd_version_id: 'jd1',
   position_id: 'p1',
@@ -137,7 +171,9 @@ function routes(path, method) {
   if (path === '/v1/dashboard/summary') return dashboardSummary;
   if (path === '/v1/operations/position/p1/active') return null;
   if (path === '/v1/rubric-library/families') return families;
-  if (path === '/v1/rubric-library/templates') return [];
+  if (path === '/v1/rubric-library/capabilities') return { user_id: 'u-admin', can_create: true, can_publish: true };
+  if (path === '/v1/rubric-library/templates') return rubricTemplates;
+  if (path.startsWith('/v1/rubric-library/versions/')) return rubricTemplates[0];
   if (path === '/v1/shortlist/shared-with-me') return [];
   if (path === '/v1/scorecards/reminders') return [];
   if (path === '/v1/applications') return applications;
