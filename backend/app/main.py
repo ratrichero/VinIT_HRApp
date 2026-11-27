@@ -65,6 +65,25 @@ def create_app() -> FastAPI:
     async def handle_validation_error(request: Request, exc: RequestValidationError):
         # Pydantic/FastAPI validation details can echo the submitted body,
         # including passwords and setup tokens. Never return those to callers.
+        #
+        # Nhưng nuốt TẤT CẢ thành một câu chung chung là lỗi khác, và đã gây hại
+        # thật: rule nghiệp vụ viết trong ``@model_validator`` (ví dụ "Tiêu chí
+        # số năm cần min_years") cũng bị thay bằng "Dữ liệu gửi đi không hợp lệ.",
+        # nên HR bấm Lưu, thấy câu đó, và không biết phải sửa ô nào.
+        #
+        # Phân biệt hai loại:
+        # * lỗi do chính mình viết trong validator (``value_error``): câu thông
+        #   báo là văn bản ta kiểm soát, không chứa dữ liệu người dùng → trả về.
+        # * lỗi kiểu/định dạng của Pydantic (``type_error``, ``string_too_long``…):
+        #   chúng hay kèm giá trị đã gửi → vẫn trả câu chung.
+        messages = []
+        for error in exc.errors():
+            if error.get("type") == "value_error":
+                message = str(error.get("msg", "")).replace("Value error, ", "").strip()
+                if message and message not in messages:
+                    messages.append(message)
+        if messages:
+            return JSONResponse(status_code=422, content={"detail": "; ".join(messages)})
         return JSONResponse(status_code=422, content={"detail": "Dữ liệu gửi đi không hợp lệ."})
 
     # Include API routers

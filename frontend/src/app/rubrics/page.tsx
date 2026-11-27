@@ -10,7 +10,8 @@ import { purgeRubricDrafts, readDraft, removeDraft, rubricDraftKey, writeDraft }
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { rubricKeywords } from '@/lib/phase2Workflow';
 import backendProposal from '@/data/rubric-proposal-it-backend.json';
-import RubricItemEditor, { buildSpec, CategoryHeader, groupTotal, type RubricItem } from '@/components/positions/RubricItemEditor';
+import RubricItemEditor, { CategoryHeader, groupTotal, type RubricItem } from '@/components/positions/RubricItemEditor';
+import { buildSpec } from '@/lib/requirementSpec';
 
 type Family = { job_family_id: string; name: string; code: string };
 type Capabilities = { user_id: string; can_create: boolean; can_publish: boolean };
@@ -267,7 +268,7 @@ export default function RubricsPage() {
           ...item,
           expected_evidence_keywords: rubricKeywords(keywords[i]),
           weight_in_group: Number(item.weight_in_group),
-          requirement_spec: buildSpec(item, keywords[i] || ''),
+          requirement_spec: buildSpec(item.requirement_spec, keywords[i] || '', item.name),
         })),
       };
       const result = creating ? await rubricApi.create({ ...payload, job_family_id: family, title, level_band: level || null }) : await rubricApi.update(selected!.template_version_id, { ...payload, expected_revision: selected!.revision });

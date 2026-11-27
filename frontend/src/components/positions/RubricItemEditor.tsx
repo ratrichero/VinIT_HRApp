@@ -8,6 +8,9 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/i18n/I18nProvider';
 import { rubricApi } from '@/lib/api';
+import {
+  buildSpec as buildSpecShared, KIND_LABEL, specKindOf, SPEC_KINDS, type SpecKind,
+} from '@/lib/requirementSpec';
 
 export type RubricItem = {
   name: string;
@@ -25,68 +28,11 @@ export const CATEGORY_STYLE = {
   NICE_TO_HAVE: { bg: '#E8F1FC', fg: '#0A2B57', label: 'ƯU TIÊN', heading: 'Tiêu chí ưu tiên' },
 } as const;
 
-/**
- * Loại tiêu chí — chính là ``requirement_spec.kind`` bên backend.
- *
- * Đây là thứ duy nhất HR cần *chọn*. Ngưỡng đi kèm (số năm, bậc bằng, mức
- * ngoại ngữ) thì HR chỉ *sửa lại* giá trị máy đã suy ra — cùng cách trang chi
- * tiết vị trí đang làm, để hai trang không dạy HR hai kiểu khác nhau.
- */
-const SPEC_KINDS = ['SKILL', 'YEARS', 'DEGREE', 'CERTIFICATION', 'LANGUAGE'] as const;
-type SpecKind = (typeof SPEC_KINDS)[number];
-
-const KIND_LABEL: Record<SpecKind, string> = {
-  SKILL: 'Kỹ năng hoặc công nghệ',
-  YEARS: 'Số năm kinh nghiệm',
-  DEGREE: 'Bằng cấp',
-  CERTIFICATION: 'Chứng chỉ',
-  LANGUAGE: 'Ngoại ngữ',
-};
-
-/** Đọc ``kind`` từ spec dạng JSONB tự do; spec hỏng thì coi như SKILL. */
-function specKindOf(spec: Record<string, unknown> | null): SpecKind {
-  const raw = typeof spec?.kind === 'string' ? spec.kind.toUpperCase() : '';
-  return (SPEC_KINDS as readonly string[]).includes(raw) ? (raw as SpecKind) : 'SKILL';
-}
+// Loại tiêu chí, nhãn hiển thị và cách dựng spec nằm ở `@/lib/requirementSpec`
+// — dùng chung với trang chi tiết vị trí, để hai trang không dạy HR hai kiểu.
 
 function numberOf(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
-}
-
-/**
- * Dựng spec gửi lên máy chủ từ thứ HR nhìn thấy.
- *
- * Vì sao phải dựng chứ không gửi nguyên ``item.requirement_spec``: khi HR vừa
- * bấm chọn loại trên một tiêu chí chưa có spec, object chỉ có ``{kind}`` —
- * schema từ chối spec không nói được gì (xem ``RequirementSpec.
- * reject_completely_empty_spec``). Nên luôn kèm ``terms`` lấy từ từ khoá, hoặc
- * từ tên tiêu chí nếu chưa có từ khoá nào.
- */
-export function buildSpec(item: RubricItem, keywords: string): Record<string, unknown> | null {
-  const base = item.requirement_spec && typeof item.requirement_spec === 'object' ? item.requirement_spec : null;
-  const kind = specKindOf(base);
-  const terms = keywords.split(',').map(k => k.trim()).filter(Boolean);
-  const effectiveTerms = terms.length > 0 ? terms : (item.name.trim() ? [item.name.trim()] : []);
-
-  // Chưa có spec và cũng không có gì để dò: gửi null để máy tự suy từ chữ,
-  // thay vì gửi một spec rỗng mà schema sẽ từ chối.
-  if (!base && effectiveTerms.length === 0) return null;
-  if (!base) return { kind, terms: effectiveTerms };
-
-  const spec: Record<string, unknown> = { ...base, kind };
-  // ``terms`` trong spec là thứ máy thực sự dò. Giữ đồng bộ với ô từ khoá để
-  // HR không phải sửa hai nơi cho cùng một danh sách.
-  spec.terms = effectiveTerms;
-  if (kind !== 'YEARS') spec.min_years = null;
-  if (kind !== 'DEGREE') spec.required_degree_level = null;
-  if (kind !== 'LANGUAGE') {
-    spec.required_languages = [];
-    spec.required_ielts = null;
-    spec.required_toeic = null;
-    spec.required_cefr = null;
-    spec.required_language_rank = null;
-  }
-  return spec;
 }
 
 /**

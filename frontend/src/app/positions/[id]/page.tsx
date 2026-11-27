@@ -54,6 +54,7 @@ import PositionSummary from '@/components/workflow/PositionSummary';
 import OperationProgressPanel from '@/components/workflow/OperationProgressPanel';
 import InvalidFileList from '@/components/workflow/InvalidFileList';
 import CVIntakePanel from '@/components/positions/CVIntakePanel';
+import { asApiSpec, buildSpec, specProblem, withKind, KIND_LABEL, SPEC_KINDS } from '@/lib/requirementSpec';
 import ApplyRubric from '@/components/positions/ApplyRubric';
 import { EMPLOYMENT_TYPES } from '@/lib/employmentTypes';
 import HiringManagerChange from './HiringManagerChange';
@@ -369,12 +370,25 @@ export default function PositionDetailPage() {
     if (!editingCriterion || !currentCriteria) return;
     try {
       setSavingCriterion(true); setCriterionError(null);
+      // Dựng spec bằng đúng hàm mà trang thư viện rubric dùng, để hai trang
+      // không thể lệch nhau. Trước đây chỗ này gửi nguyên object trong state,
+      // nên thêm tiêu chí mới (spec mặc định `terms: []`) bị 422 ngay từ lần
+      // lưu đầu — mà 422 thì bị nuốt thành "Dữ liệu gửi đi không hợp lệ." nên
+      // HR không biết phải sửa gì.
+      const namedKeywords = (editingCriterion.expected_evidence_keywords || []).join(', ');
+      const spec = buildSpec(editingCriterion.requirement_spec, namedKeywords, editingCriterion.name);
+      const problem = specProblem(spec);
+      if (problem) {
+        setSavingCriterion(false);
+        setCriterionError(`${editingCriterion.name.trim() || t("Tiêu chí")}: ${t(problem)}`);
+        return;
+      }
       const payload = {
         name: editingCriterion.name.trim(), description: editingCriterion.description.trim(),
         category: editingCriterion.category,
         weight_in_group: Number(editingCriterion.weight_in_group),
-        expected_evidence_keywords: editingCriterion.requirement_spec?.terms || editingCriterion.expected_evidence_keywords || [],
-        requirement_spec: editingCriterion.requirement_spec || null,
+        expected_evidence_keywords: (spec?.terms as string[] | undefined) || editingCriterion.expected_evidence_keywords || [],
+        requirement_spec: asApiSpec(spec),
       };
       if (editingCriterion.criterion_id) {
         await criteriaApi.updateItem(currentCriteria.criteria_version_id, editingCriterion.criterion_id, payload);
@@ -1216,12 +1230,8 @@ export default function PositionDetailPage() {
               <InputLabel id="requirement-kind-label">{t("Loại yêu cầu")}</InputLabel>
               <Select labelId="requirement-kind-label" label={t("Loại yêu cầu")}
                 value={editingCriterion.requirement_spec?.kind || 'SKILL'}
-                onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...(editingCriterion.requirement_spec || { terms: [], required_languages: [] }), kind: e.target.value as RequirementSpec['kind'], terms: editingCriterion.requirement_spec?.terms || [], required_languages: editingCriterion.requirement_spec?.required_languages || [] } })}>
-                <MenuItem value="SKILL">{t("Kỹ năng")}</MenuItem>
-                <MenuItem value="YEARS">{t("Số năm kinh nghiệm")}</MenuItem>
-                <MenuItem value="DEGREE">{t("Bằng cấp")}</MenuItem>
-                <MenuItem value="CERTIFICATION">{t("Chứng chỉ")}</MenuItem>
-                <MenuItem value="LANGUAGE">{t("Ngoại ngữ")}</MenuItem>
+                onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: asApiSpec(withKind(editingCriterion.requirement_spec, e.target.value as RequirementSpec['kind'])) })}>
+                {SPEC_KINDS.map(k => <MenuItem key={k} value={k}>{t(KIND_LABEL[k])}</MenuItem>)}
               </Select>
             </FormControl>
             <TextField label={t("Thuật ngữ bằng chứng (phân tách bằng dấu phẩy)")} fullWidth

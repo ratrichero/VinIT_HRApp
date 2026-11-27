@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
 
-const SRC_PATH = path.join(__dirname, '..', 'src', 'components', 'positions', 'RubricItemEditor.tsx');
+const SRC_PATH = path.join(__dirname, '..', 'src', 'lib', 'requirementSpec.ts');
 
 /** `require` giả: trả về chính nó cho mọi truy cập, đủ để import không nổ. */
 function stubRequire() {
@@ -63,22 +63,22 @@ const item = (over = {}) => ({
 
 test('chưa có spec, chưa có từ khoá, không có tên → gửi null để máy tự suy từ chữ', () => {
   // Gửi {kind:'SKILL'} trần là spec vô nghĩa; schema sẽ từ chối.
-  assert.strictEqual(buildSpec(item({ name: '' }), ''), null);
+  assert.strictEqual(buildSpec(null, '', ''), null);
 });
 
 test('đổi loại trên tiêu chí chưa có spec vẫn gửi được terms', () => {
-  const spec = buildSpec(item({ requirement_spec: { kind: 'YEARS' } }), 'python, fastapi');
+  const spec = buildSpec({ kind: 'YEARS' }, 'python, fastapi', 'Kinh nghiệm API');
   assert.strictEqual(spec.kind, 'YEARS');
   assert.deepStrictEqual(spec.terms, ['python', 'fastapi']);
 });
 
 test('không có từ khoá thì lấy tên tiêu chí làm thuật ngữ, không để rỗng', () => {
-  const spec = buildSpec(item({ requirement_spec: { kind: 'DEGREE' }, name: 'Bằng đại học' }), '');
+  const spec = buildSpec({ kind: 'DEGREE' }, '', 'Bằng đại học');
   assert.deepStrictEqual(spec.terms, ['Bằng đại học']);
 });
 
 test('từ khoá nhiều dấu phẩy thừa được làm sạch', () => {
-  const spec = buildSpec(item(), ' python ,, fastapi , ');
+  const spec = buildSpec({}, ' python ,, fastapi , ', 'X');
   assert.deepStrictEqual(spec.terms, ['python', 'fastapi']);
 });
 
@@ -86,22 +86,22 @@ test('đổi loại thì bỏ ngưỡng của loại cũ, không lưu rác chéo
   // Để min_years lại trên một tiêu chí SKILL là dữ liệu chết, và người đọc sau
   // không biết nó còn hiệu lực hay không.
   const spec = buildSpec(
-    item({ requirement_spec: { kind: 'SKILL', min_years: 5, required_degree_level: 3 } }),
-    'python',
+    { kind: 'SKILL', min_years: 5, required_degree_level: 3 },
+    'python', 'X',
   );
   assert.strictEqual(spec.min_years, null);
   assert.strictEqual(spec.required_degree_level, null);
 });
 
 test('giữ ngưỡng của đúng loại đang chọn', () => {
-  const spec = buildSpec(item({ requirement_spec: { kind: 'YEARS', min_years: 4 } }), 'python');
+  const spec = buildSpec({ kind: 'YEARS', min_years: 4 }, 'python', 'X');
   assert.strictEqual(spec.kind, 'YEARS');
   assert.strictEqual(spec.min_years, 4);
 });
 
 test('spec hỏng (chuỗi thay vì object) không làm nổ trang', () => {
   // requirement_spec là JSONB tự do; dữ liệu cũ có thể là bất cứ thứ gì.
-  const spec = buildSpec(item({ requirement_spec: 'rác' }), 'python');
+  const spec = buildSpec('rác', 'python', 'X');
   assert.strictEqual(spec.kind, 'SKILL');
   assert.deepStrictEqual(spec.terms, ['python']);
 });
@@ -117,8 +117,8 @@ test('spec đang là LANGUAGE thì giữ nguyên ngôn ngữ, không xoá', () =
   // buildSpec KHÔNG đổi kind — việc đó là của changeKind khi HR bấm ô chọn.
   // Ở đây kiểm điều ngược lại: đúng loại rồi thì ngưỡng của nó phải sống sót.
   const spec = buildSpec(
-    item({ requirement_spec: { kind: 'LANGUAGE', required_languages: ['english'], required_ielts: 6.5 } }),
-    'ielts',
+    { kind: 'LANGUAGE', required_languages: ['english'], required_ielts: 6.5 },
+    'ielts', 'X',
   );
   assert.strictEqual(spec.kind, 'LANGUAGE');
   assert.deepStrictEqual(spec.required_languages, ['english']);
@@ -127,8 +127,8 @@ test('spec đang là LANGUAGE thì giữ nguyên ngôn ngữ, không xoá', () =
 
 test('ngưỡng của loại khác bị xoá khi spec đang là YEARS', () => {
   const spec = buildSpec(
-    item({ requirement_spec: { kind: 'YEARS', min_years: 3, required_languages: ['english'] } }),
-    'python',
+    { kind: 'YEARS', min_years: 3, required_languages: ['english'] },
+    'python', 'X',
   );
   assert.strictEqual(spec.kind, 'YEARS');
   assert.strictEqual(spec.min_years, 3);

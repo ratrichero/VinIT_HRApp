@@ -26,6 +26,8 @@ const stripComments = (src) =>
   src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 const EDITOR = stripComments(read('src', 'components', 'positions', 'RubricItemEditor.tsx'));
+// Loại tiêu chí + nhãn hiển thị đã chuyển sang module dùng chung.
+const SPEC_MODULE = stripComments(read('src', 'lib', 'requirementSpec.ts'));
 const PAGE = stripComments(read('src', 'app', 'rubrics', 'page.tsx'));
 
 test('không còn ô nhập JSON cho HR', () => {
@@ -37,11 +39,10 @@ test('không còn ô nhập JSON cho HR', () => {
 test('HR chọn loại tiêu chí bằng nhãn đọc được, không phải mã kỹ thuật', () => {
   // Năm loại khớp đúng `kind` của RequirementSpec bên backend.
   for (const kind of ['SKILL', 'YEARS', 'DEGREE', 'CERTIFICATION', 'LANGUAGE']) {
-    assert.ok(EDITOR.includes(`  ${kind}:`), `thiếu loại ${kind} trong KIND_LABEL`);
+    assert.ok(SPEC_MODULE.includes(`  ${kind}:`), `thiếu loại ${kind} trong KIND_LABEL`);
   }
   // Nhãn hiện ra là tiếng Việt; mã SKILL/YEARS chỉ nằm trong value của MenuItem.
-  assert.ok(EDITOR.includes("SKILL: 'Kỹ năng hoặc công nghệ'"));
-  assert.ok(EDITOR.includes("SKILL: 'Kỹ năng hoặc công nghệ'"), 'nhãn phải là chữ, không phải mã');
+  assert.ok(SPEC_MODULE.includes("SKILL: 'Kỹ năng hoặc công nghệ'"));
   assert.ok(!/label=\{[^}]*\bkind\b[^}]*\}/.test(EDITOR), 'không được lấy thẳng mã kind làm nhãn');
 });
 
@@ -60,8 +61,8 @@ test('đổi loại tiêu chí giữ nguyên phần còn lại của spec', () =
 
 test('spec hỏng không làm trắng form', () => {
   // spec có thể là null, chuỗi, hoặc object thiếu kind — hàm đọc phải chịu được.
-  assert.ok(EDITOR.includes('function specKindOf'), 'thiếu hàm đọc kind an toàn');
-  assert.ok(EDITOR.includes("typeof spec?.kind === 'string'"), 'không kiểm kiểu trước khi đọc kind');
+  assert.ok(SPEC_MODULE.includes('export function specKindOf'), 'thiếu hàm đọc kind an toàn');
+  assert.ok(SPEC_MODULE.includes("typeof asRecord.kind === 'string'"), 'không kiểm kiểu trước khi đọc kind');
 });
 
 test('"Phân tách bằng dấu phẩy" nằm trong tooltip, không chiếm chỗ dưới ô nhập', () => {

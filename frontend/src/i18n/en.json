@@ -2085,5 +2085,7 @@
   "Suy lại từ tên + mô tả": "Re-infer from name + description",
   "chưa có số năm tối thiểu — điền ô \"Số năm tối thiểu\", hoặc đổi cách so khớp sang \"Kỹ năng hoặc công nghệ\".": "no minimum years yet — fill in \"Minimum years\", or switch \"How to match\" to \"Skill or technology\".",
   "chưa chọn bậc bằng tối thiểu.": "no minimum degree level selected yet.",
-  "chưa nêu ngôn ngữ nào, cũng chưa có mức IELTS tối thiểu.": "no language named and no minimum IELTS yet."
+  "chưa nêu ngôn ngữ nào, cũng chưa có mức IELTS tối thiểu.": "no language named and no minimum IELTS yet.",
+  "chưa nêu ngôn ngữ nào, cũng chưa có mức IELTS/TOEIC/CEFR tối thiểu.": "no language named and no minimum IELTS/TOEIC/CEFR yet.",
+  "chưa có thuật ngữ nào để máy dò — điền ô \"Thuật ngữ bằng chứng\".": "no terms for the engine to look for — fill in \"Evidence terms\"."
 }
