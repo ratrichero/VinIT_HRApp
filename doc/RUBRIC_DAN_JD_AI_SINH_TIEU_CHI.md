@@ -64,7 +64,7 @@ không mất, mở lại hỏi khôi phục) và **chặn rời trang khi có th
 
 ---
 
-## Điều kiện để AI thực sự chạy
+## Điều kiện để AI thực sự chạy (vẫn đúng, chưa đổi)
 
 Tính năng có trong code **không** có nghĩa là nó chạy được trên VPS của anh. Kiểm DB thật:
 
@@ -110,57 +110,98 @@ Vào **Admin → AI**, bấm nút kiểm tra kết nối. Xanh là gọi đượ
 
 ---
 
-## Chỗ còn yếu — đề xuất sửa
+## Chỗ còn yếu — trạng thái sau khi sửa (a) và (b)
 
-Tính năng dùng được, nhưng có bốn chỗ đáng cải thiện. **Chưa sửa trong lượt này** vì cần
-anh quyết định phạm vi.
+### a) Prompt thiên về JD tiếng Anh — **ĐÃ SỬA** (`2ec87a2`)
 
-### a) Prompt thiên về JD tiếng Anh — **quan trọng nhất**
-
-Nguyên văn dòng 593:
+Câu mở đầu cũ:
 
 > The JD is expected to be in English and most JDs will be English. Vietnamese JDs are
 > supported as an option, not as the default
 
-Với một trường đại học Việt Nam, **mặc định đó ngược**. Thiết kế đã cố ý: dòng 604 yêu cầu
-giữ nguyên ngôn ngữ JD ("a Vietnamese JD yields Vietnamese criteria text"), nên JD tiếng
-Việt vẫn ra tiêu chí tiếng Việt. Nhưng câu mở đầu vẫn đẩy model về phía tiếng Anh —
-cùng loại lỗi với `lang='eng'` của OCR đã sửa.
+Nay đảo thành mặc định tiếng Việt, vẫn giữ nhánh xử lý JD tiếng Anh. Câu mới nói rõ: đọc
+JD theo đúng ngôn ngữ của nó, không dịch trước; JD tiếng Anh thì output tiếng Anh, JD
+tiếng Việt thì output tiếng Việt.
 
-Đề xuất: đảo thành "JD có thể là tiếng Việt hoặc tiếng Anh; đọc theo đúng ngôn ngữ của nó,
-mặc định tiếng Việt". Sửa prompt nghĩa là **tăng `CRITERIA_PROMPT_VERSION`** để log biết
-bộ tiêu chí nào sinh ra từ prompt nào.
+Prompt này **dùng chung** cho cả `criteria.py` (sinh tiêu chí cho một vị trí) và
+`rubric_library.py` (sinh nháp thư viện), nên sửa một chỗ cải thiện cả hai luồng — không
+chỉ thư viện rubric.
 
-### b) Không có test nào kiểm JD tiếng Việt đầu-cuối
+`CRITERIA_PROMPT_VERSION`: `criteria-prompt-v2.1` → **`criteria-prompt-v2.2`**.
 
-Test hiện tại chỉ đọc mã nguồn (kiểm có `INSERT` hay không, có `PASTED-JD` hay không).
-Không có test nào chạy một JD tiếng Việt qua `_draft_from_jd_text` rồi kiểm:
-nhãn `MUST_HAVE` còn nguyên tiếng Anh, nội dung ra tiếng Việt, trọng số cộng 100.
+### b) Test khoá prompt và test đầu-cuối cho đường dán JD — **ĐÃ SỬA** (`2ec87a2`)
 
-Rủi ro cụ thể: model trả `"Bắt buộc"` thay vì `"MUST_HAVE"` → `coerce_category` phải đoán.
-Nếu đoán sai, toàn bộ tiêu chí bắt buộc rơi vào nhóm ưu tiên và điểm số sai âm thầm.
-`rubric_normalizer` có xử lý việc này, nhưng **không có test khoá nó lại**.
+Đánh giá ban đầu của tôi ở đây **sai một phần**: `rubric_normalizer` đã có test tiếng Việt
+từ trước (`test_rubric_suggest.py:18`), và `suggest_from_position` đã có test đầu-cuối với
+JD tiếng Việt. Chỗ thực sự trống là hai cái khác:
 
-### c) Lỗi AI hiện không phân biệt được nguyên nhân
+**1. Không có test nào đọc nội dung prompt.** Đổi prompt thành gì cũng không có gì đỏ —
+nên câu "most JDs will be English" nằm đó bao lâu cũng không ai biết. Nay có
+`test_criteria_prompt_language.py` (6 test) khoá: tiếng Việt là mặc định, câu cũ không
+được quay lại, JD tiếng Anh vẫn xử lý đúng, enum `MUST_HAVE`/`NICE_TO_HAVE` không được
+dịch, chốt chặn nội dung phân biệt đối xử còn nguyên, JD được bọc là `untrusted`, và
+version đã bump.
 
-Mọi lỗi LLM đều thành một câu: *"Không thể sinh rubric bằng AI. Vui lòng kiểm tra cấu
-hình và thử lại."* Ba nguyên nhân rất khác nhau bị gộp làm một:
+**2. Đường dán JD không có test đầu-cuối.** Đây là đường **duy nhất dùng được khi chưa có
+vị trí nào** — tức đúng đường anh sẽ dùng. Test cũ chỉ kiểm đường `suggest_from_position`.
+Nay có 2 test mới: JD tiếng Việt cho nội dung tiếng Việt + enum tiếng Anh + trọng số
+`"70%"` đọc đúng và cộng 100 mỗi nhóm; và toàn bộ tiêu chí hỏng thì 502 chứ không trả danh
+sách rỗng.
 
-- chưa bật `ALLOW_EXTERNAL_API` → sửa ở `.env`
-- sai/hết hạn API key → sửa trong Admin → AI
-- model trả JSON hỏng → bấm lại có thể được
+Đã kiểm ngược cả hai: khôi phục prompt cũ → 1 test đỏ; gỡ alias `"bắt buộc"` →
+3 test đỏ.
 
-HR đọc câu đó không biết phải làm gì, và **không tự sửa được cái nào** — cả ba đều là việc
-của Admin. Đề xuất: trả mã lỗi riêng cho từng trường hợp, và với hai trường hợp đầu thì
-nói thẳng "báo Quản trị viên" thay vì "thử lại".
+### c) Gợi ý: phân biệt ba nguyên nhân lỗi
 
-### d) Không có nút dùng lại JD của vị trí khác
+Hiện mọi lỗi LLM đều thành một câu: *"Không thể sinh rubric bằng AI. Vui lòng kiểm tra cấu
+hình và thử lại."* Ba nguyên nhân rất khác nhau bị gộp làm một, và **cả ba đều là việc của
+Admin** — HR đọc câu đó không biết phải làm gì.
+
+Điều đáng nói: hệ thống **đã có** hạ tầng phân loại lỗi, chỉ là nó không ra tới người dùng.
+`_call_llm` tính sẵn `failure_category` (`INVALID_JSON` / `HTTP_ERROR` / `NETWORK_ERROR` /
+`OTHER_ERROR`) và test-kết-nối đã có `error_code` sẵn (`AUTH_FAILED`, `RATE_LIMITED`,
+`CONNECT_ERROR`…). Nhưng `LLMError` là `class LLMError(Exception): pass` — **không mang mã
+nào cả**, nên tầng API không thể phân biệt.
+
+Đề xuất (nhỏ, ~1 buổi):
+
+1. Thêm `code` vào `LLMError`, gán ở từng `except` đã có sẵn `failure_category`.
+2. Ở `rubric_library.py:353` và `criteria.py`, map mã sang ba câu khác nhau:
+   - `POLICY_BLOCKED` (chưa bật `ALLOW_EXTERNAL_API`) → *"Máy chủ chưa cho phép gọi AI ra
+     ngoài. Báo Quản trị viên bật `ALLOW_EXTERNAL_API`."*
+   - `AUTH_FAILED` / `NOT_FOUND` → *"Cấu hình AI sai hoặc khoá đã hết hạn. Báo Quản trị
+     viên kiểm tra ở Admin → AI."*
+   - `INVALID_JSON` / `RATE_LIMITED` / `TIMEOUT` → *"AI trả về không đọc được. Bấm thử lại;
+     vẫn lỗi thì báo Quản trị viên."*
+3. **Không trả chi tiết kỹ thuật thô** (status code, URL, tên model) ra giao diện HR —
+   chỉ trả mã và câu tiếng Việt.
+
+Lưu ý: chỗ chặn `ALLOW_EXTERNAL_API` hiện ném `LLMError` chung chung ở `_check_endpoint_policy`
+(`llm_client.py:236-251`) và **lỗi này xảy ra trước khi có `try`** ở `_call_llm`, nên
+`failure_category` không bắt được. Muốn phân biệt được trường hợp này thì phải bắt riêng.
+
+### d) Gợi ý: nút "Lấy JD từ vị trí khác"
 
 Muốn dựng rubric cho "Backend Engineer" khi đã có vị trí "Backend Engineer (cũ)" thì phải
-mở vị trí cũ, copy JD, quay lại dán tay. Đường "Sinh từ JD của một vị trí" làm được việc
-này nhưng nó **gắn chặt với vị trí đó** — rubric sinh ra mang tên vị trí cũ.
+mở vị trí cũ, copy JD, quay lại dán tay. Đường "Sinh từ JD của một vị trí" làm được nhưng
+rubric sinh ra **mang tên vị trí cũ**.
 
-Đây là thiếu sót nhỏ, không chặn. Ghi lại để cân nhắc.
+Tin tốt: **API đã trả sẵn nội dung JD.** `GET /positions/{id}/jd-versions` trả về
+`content_text` (`positions.py:563-572`). Nên đây không phải việc backend, chỉ là thiếu một
+nút nối hai màn hình.
+
+Đề xuất (nhỏ hơn (c)): trong hộp "Sinh từ JD dán tay", thêm một hộp chọn **"Hoặc lấy JD từ
+vị trí có sẵn"**:
+
+1. Chọn vị trí → gọi `positionsApi.getJdVersions(id)` → lấy bản mới nhất → **đổ vào ô
+   `jdText`**, để HR thấy và sửa được trước khi bấm "Sinh nháp".
+2. **Không** tự đổi nhóm: nhóm vẫn do HR chọn, vì đây là rubric **mới** chứ không phải
+   rubric của vị trí cũ. Có thể gợi ý nhóm của vị trí đó nhưng không khoá.
+3. Tên rubric vẫn để trống cho HR đặt — đừng lấy tên vị trí cũ, đó chính là cái đang gây
+   nhầm lẫn.
+
+Vì sao đổ vào ô chứ không gọi thẳng API: HR phải thấy mình đang đưa cái gì cho AI, và sửa
+được. Đó cũng là lý do toàn bộ luồng này giữ nguyên tắc "AI chỉ điền biểu mẫu".
 
 ---
 
@@ -169,8 +210,9 @@ này nhưng nó **gắn chặt với vị trí đó** — rubric sinh ra mang t�
 | Câu hỏi | Trả lời |
 |---|---|
 | Có nên tích hợp? | **Đã tích hợp rồi**, từ trước. Không cần làm thêm. |
+| Còn phải làm gì? | Chỉ bật `ALLOW_EXTERNAL_API=true` ở `.env` backend. Code đã sẵn sàng. |
 | Có nên dùng không? | **Nên** — nhanh hơn gõ tay nhiều lần, và AI chỉ đề xuất chứ không tự lưu |
-| Rủi ro chính? | JD tiếng Việt có thể bị prompt đẩy về tiếng Anh (mục a) |
+| Rủi ro chính? | ~~JD tiếng Việt bị prompt đẩy về tiếng Anh~~ — **đã sửa** (`2ec87a2`, prompt v2.2) |
 | Trước khi dùng cần gì? | `ALLOW_EXTERNAL_API=true` trong `.env` backend, rồi khởi động lại |
 | Kiểm thế nào? | Admin → AI → kiểm tra kết nối; hoặc dán thử một JD, xem có ra tiêu chí không |
 
