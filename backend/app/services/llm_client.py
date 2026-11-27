@@ -560,7 +560,7 @@ class LLMClient:
                     )
                     return parsed
 
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError:
                 failure_category = "INVALID_JSON"
                 logger.error("LLM returned invalid JSON")
                 raise LLMError("Failed to parse LLM response as JSON")
@@ -590,7 +590,7 @@ class LLMClient:
         """Task AIC-01: Extract structured MUST_HAVE/NICE_TO_HAVE criteria from JD"""
         system_prompt = """You are an expert HR Recruitment Assistant specialized in job description decomposition.
 Your task is to analyze the provided Job Description (JD) and extract explicit, verifiable evaluation criteria.
-The JD is expected to be in English and most JDs will be English. Vietnamese JDs are supported as an option, not as the default: if the JD is already English, keep all output text in English. If it is Vietnamese, read it as Vietnamese rather than translating it first.
+The JD may be written in Vietnamese or English, and Vietnamese is the default expectation: most JDs here are written in Vietnamese by a Vietnamese institution. Detect the JD's own language and read it in that language rather than translating it first. If the JD is in English, keep all output text in English; if it is in Vietnamese, write the criteria in Vietnamese.
 
 RULES:
 1. Divide criteria into two strict categories:
@@ -628,7 +628,7 @@ RULES:
         # Validate against schema
         try:
             JD_Criteria_Schema.model_validate(result)
-        except ValidationError as e:
+        except ValidationError:
             logger.error("LLM criteria output failed schema validation")
             raise LLMError("Generated criteria failed validation")
 
@@ -671,7 +671,7 @@ STRICT PRIVACY & ANTI-BIAS RULES:
 
         try:
             CandidateProfileSchema.model_validate(result)
-        except ValidationError as e:
+        except ValidationError:
             logger.error("LLM profile extraction failed schema validation")
             raise LLMError("Extracted candidate profile failed validation")
 
