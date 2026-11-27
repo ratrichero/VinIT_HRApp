@@ -2048,5 +2048,12 @@
   "Phân tách bằng dấu phẩy": "Separate with commas",
   "Requirement spec (JSON)": "Requirement spec (JSON)",
   "Tiêu chí bắt buộc": "Mandatory criteria",
-  "Tiêu chí ưu tiên": "Preferred criteria"
+  "Tiêu chí ưu tiên": "Preferred criteria",
+  "Tạo rubric mới": "Create a new rubric",
+  "Rubric trong thư viện": "Rubrics in the library",
+  "rubric": "rubrics",
+  "đã xuất bản": "published",
+  "Chưa có rubric nào. Dùng một trong các nút ở trên để tạo bản nháp đầu tiên.": "No rubrics yet. Use one of the buttons above to create the first draft.",
+  "Rubric mới — đang soạn": "New rubric — editing",
+  "Chi tiết rubric": "Rubric details"
 }

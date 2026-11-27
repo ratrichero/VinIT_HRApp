@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Accordion, AccordionDetails as AccordionContent, AccordionSummary, Alert, Box, Button, Card, CardContent, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
+import { Accordion, AccordionDetails as AccordionContent, AccordionSummary, Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/i18n/I18nProvider';
 import { localizeServerMessage } from '@/i18n/serverMessages';
@@ -311,25 +311,126 @@ export default function RubricsPage() {
         </Stack>
       </AccordionContent>
     </Accordion>
-    {loading ? <CircularProgress /> : capabilities && <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} alignItems="start">
-      <Card variant="outlined" sx={{ width: { xs: '100%', lg: 360 }, flexShrink: 0 }}><CardContent>
-        {capabilities.can_create && <Stack spacing={1}>
-          <Button variant="contained" onClick={create} disabled={busy}>{t('Tạo rubric nháp')}</Button>
-          <Button variant="outlined" onClick={openSuggest} disabled={busy}>{t('Sinh từ JD của một vị trí')}</Button>
-          <Button variant="outlined" onClick={openJdSuggest} disabled={busy}>{t('Sinh từ JD dán tay')}</Button>
-          <Button onClick={useProposal} disabled={busy} sx={{ justifyContent: 'flex-start', textAlign: 'left' }}>{t('Dùng bộ mẫu ví dụ (Backend Python)')}</Button>
-          <Typography variant="caption">{t('Bộ mẫu ví dụ là tiêu chí viết sẵn trong mã nguồn, KHÔNG phải AI sinh ra. Hai nút "Sinh từ JD" mới gọi AI: một nút đọc JD của vị trí đã có, một nút đọc JD anh dán vào — dùng khi muốn dựng rubric trước khi mở vị trí. Cả ba đều chỉ điền biểu mẫu, HR phải rà soát rồi bấm lưu.')}</Typography>
-        </Stack>}
-        {!capabilities.can_create && <Alert severity="warning" sx={{ mt: 1 }}>
-          {t('Tài khoản của bạn xem được thư viện nhưng không tạo được rubric. Cần vai trò HR tuyển dụng, Trưởng nhóm HR hoặc Quản trị viên — nhờ Quản trị viên cấp trong mục Người dùng.')}
-        </Alert>}
-        {versions.length === 0 && <Typography sx={{ mt: 2 }}>{t('Chưa có rubric nào.')}</Typography>}
-        {versions.map(v => <Button key={v.template_version_id} fullWidth sx={{ mt: 1, justifyContent: 'flex-start', textAlign: 'left' }} variant={selected?.template_version_id === v.template_version_id ? 'outlined' : 'text'} disabled={busy} onClick={() => select(v.template_version_id)}>{v.title} · v{v.version_number} · {statusLabel(v.status, t)} · {families.find(f => f.job_family_id === v.job_family_id) ? familyLabel(families.find(f => f.job_family_id === v.job_family_id)!.code, v.family_name || '', t) : v.family_name}</Button>)}
-      </CardContent></Card>
-      {(creating || selected) && (
-        <Card variant="outlined" sx={{ flex: 1, width: '100%' }}>
+    {loading ? <CircularProgress /> : capabilities && (
+      <Stack spacing={2}>
+
+        {/* ── KHỐI 1: các nút tạo mới ───────────────────────────────────────
+            Nằm trên cùng và bề ngang đầy đủ: đây là việc HR làm đầu tiên mỗi
+            lần mở thư viện, và ở cột hẹp 360px bốn nút dọc chiếm gần hết chiều
+            cao màn hình, đẩy danh sách rubric xuống dưới đáy. */}
+        <Card variant="outlined">
           <CardContent>
-            <Stack spacing={2}>
+            <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.5 }}>
+              {t('Tạo rubric mới')}
+            </Typography>
+            {capabilities.can_create ? (
+              <>
+                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                  <Button variant="contained" onClick={create} disabled={busy}>{t('Tạo rubric nháp')}</Button>
+                  <Button variant="outlined" onClick={openSuggest} disabled={busy}>{t('Sinh từ JD của một vị trí')}</Button>
+                  <Button variant="outlined" onClick={openJdSuggest} disabled={busy}>{t('Sinh từ JD dán tay')}</Button>
+                  <Button onClick={useProposal} disabled={busy}>{t('Dùng bộ mẫu ví dụ (Backend Python)')}</Button>
+                </Box>
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 1.5 }}>
+                  {t('Bộ mẫu ví dụ là tiêu chí viết sẵn trong mã nguồn, KHÔNG phải AI sinh ra. Hai nút "Sinh từ JD" mới gọi AI: một nút đọc JD của vị trí đã có, một nút đọc JD anh dán vào — dùng khi muốn dựng rubric trước khi mở vị trí. Cả ba đều chỉ điền biểu mẫu, HR phải rà soát rồi bấm lưu.')}
+                </Typography>
+              </>
+            ) : (
+              <Alert severity="warning">
+                {t('Tài khoản của bạn xem được thư viện nhưng không tạo được rubric. Cần vai trò HR tuyển dụng, Trưởng nhóm HR hoặc Quản trị viên — nhờ Quản trị viên cấp trong mục Người dùng.')}
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── KHỐI 2: danh sách rubric đã có ────────────────────────────────
+            Mỗi dòng là một nút chọn, đủ rộng để đọc tên + phiên bản + trạng
+            thái + nhóm trên một hàng thay vì bị bóp trong cột 360px. */}
+        <Card variant="outlined">
+          <CardContent>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+              <Typography variant="subtitle2" fontWeight={700}>
+                {t('Rubric trong thư viện')}
+              </Typography>
+              {versions.length > 0 && (
+                <Typography variant="caption" color="text.secondary">
+                  {versions.length} {t('rubric')} · {versions.filter(v => v.status === 'PUBLISHED').length} {t('đã xuất bản')}
+                </Typography>
+              )}
+            </Box>
+            {versions.length === 0 && (
+              <Typography variant="body2" color="text.secondary">
+                {t('Chưa có rubric nào. Dùng một trong các nút ở trên để tạo bản nháp đầu tiên.')}
+              </Typography>
+            )}
+            {versions.length > 0 && (
+              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', xl: '1fr 1fr 1fr' } }}>
+                {versions.map(v => {
+                  const familyName = families.find(f => f.job_family_id === v.job_family_id);
+                  const isActive = selected?.template_version_id === v.template_version_id;
+                  return (
+                    <Card
+                      key={v.template_version_id}
+                      variant="outlined"
+                      onClick={() => !busy && select(v.template_version_id)}
+                      sx={{
+                        cursor: busy ? 'default' : 'pointer',
+                        borderColor: isActive ? 'primary.main' : 'divider',
+                        borderWidth: isActive ? 2 : 1,
+                        backgroundColor: isActive ? '#F5F9FF' : 'transparent',
+                        '&:hover': busy ? {} : { borderColor: 'primary.light', backgroundColor: '#FAFCFF' },
+                      }}
+                    >
+                      <CardContent sx={{ py: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        <Typography variant="body2" fontWeight={700} sx={{ mb: 0.5 }}>
+                          {v.title}
+                        </Typography>
+                        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <Chip size="small" label={`v${v.version_number}`} sx={{ height: 20, fontSize: 11 }} />
+                          <Chip
+                            size="small"
+                            label={statusLabel(v.status, t)}
+                            sx={{
+                              height: 20, fontSize: 11,
+                              backgroundColor: v.status === 'PUBLISHED' ? '#E7F6EC' : v.status === 'DRAFT' ? '#FFF4E5' : '#F1F3F5',
+                              color: v.status === 'PUBLISHED' ? '#1E6B3A' : v.status === 'DRAFT' ? '#8A5300' : '#5A6672',
+                            }}
+                          />
+                          {familyName && (
+                            <Chip size="small" variant="outlined" label={familyLabel(familyName.code, familyName.name, t)} sx={{ height: 20, fontSize: 11 }} />
+                          )}
+                          {v.level_band && (
+                            <Typography variant="caption" color="text.secondary">· {v.level_band}</Typography>
+                          )}
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </Box>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── KHỐI 3: chi tiết rubric đang chọn ─────────────────────────────
+            Đẩy XUỐNG DƯỚI danh sách, bề ngang đầy đủ. Trước đây khối này nằm
+            cạnh danh sách nên mỗi cột tiêu chí chỉ còn khoảng 330px — đủ để
+            một ô nhập, không đủ để đọc. */}
+        {(creating || selected) && (
+          <Card variant="outlined" sx={{ borderColor: 'primary.light' }}>
+            <CardContent>
+              <Stack spacing={2}>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+                  <Typography variant="subtitle2" fontWeight={700}>
+                    {creating ? t('Rubric mới — đang soạn') : t('Chi tiết rubric')}
+                  </Typography>
+                  {!creating && (
+                    <Button size="small" onClick={() => { if (!dirty || window.confirm(t('Bỏ các thay đổi chưa lưu?'))) { setSelected(null); setDirty(false); } }}>
+                      {t('Đóng')}
+                    </Button>
+                  )}
+                </Box>
+
               {creating ? (
                 <>
                   <TextField select label={t('Nhóm vị trí')} value={family} onChange={e => { setFamily(e.target.value); setDirty(true); }}>
@@ -468,11 +569,12 @@ export default function RubricsPage() {
                   {t('Chỉ Trưởng nhóm HR hoặc Quản trị viên xuất bản được rubric. Bản nháp này cần người có vai trò đó xuất bản.')}
                 </Alert>
               )}
-            </Stack>
-          </CardContent>
-        </Card>
-      )}
-    </Stack>}
+              </Stack>
+            </CardContent>
+          </Card>
+        )}
+      </Stack>
+    )}
 
     <Dialog open={suggestOpen} onClose={() => !suggesting && setSuggestOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>{t('Sinh rubric nháp từ JD của một vị trí')}</DialogTitle>
