@@ -42,6 +42,8 @@ export default function CareersPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [familyFilter, setFamilyFilter] = useState('');
   const [familyQuery, setFamilyQuery] = useState('');
+  // Chưa tick câu đồng ý mà đã bấm Gửi: hiện lời nhắc thay vì để nút im lặng.
+  const [consentMissing, setConsentMissing] = useState(false);
   // Tìm theo chức danh, ngay trên danh sách đã tải. Không gọi API: số tin còn
   // hạn đủ nhỏ để lọc tại chỗ, và lọc tại chỗ thì gõ tới đâu thấy tới đó.
   const [titleQuery, setTitleQuery] = useState('');
@@ -121,7 +123,7 @@ export default function CareersPage() {
     }
     setRequestId(requestIdValue);
     setPoolToken(poolTokenValue);
-    setJob(selected); setOptedIn(false); setSavedToken(''); setError(''); setSuccess(''); setCvName('');
+    setJob(selected); setOptedIn(false); setConsentMissing(false); setSavedToken(''); setError(''); setSuccess(''); setCvName('');
     // Đưa form vào tầm nhìn: trên trang dài, bấm vào tin ở cuối danh sách mà
     // form mở ở đầu trang thì người dùng tưởng nút không có tác dụng.
     if (typeof window !== 'undefined') window.setTimeout(() => {
@@ -136,6 +138,11 @@ export default function CareersPage() {
     const form = event.currentTarget;
     const file = (form.elements.namedItem('cv') as HTMLInputElement | null)?.files?.[0];
     if (!file) { setError('Hãy chọn tệp CV trước khi gửi hồ sơ.'); return; }
+    // Câu đồng ý là bắt buộc. `required` trên checkbox đã chặn phần lớn trường
+    // hợp, nhưng thông báo của trình duyệt nằm ngoài tầm nhìn khi form dài;
+    // kiểm ở đây để lời nhắc hiện ngay trên nút.
+    if (!optedIn) { setConsentMissing(true); return; }
+    setConsentMissing(false);
     setBusy(true); setError(''); setSuccess('');
     try {
       const data = new FormData(form);
@@ -148,7 +155,7 @@ export default function CareersPage() {
         setError(careersFailure(res.status, result.detail));
         return;
       }
-      setSuccess('Đã tiếp nhận yêu cầu thử nghiệm; CV vẫn cần được xử lý. Gửi lại cùng yêu cầu không tạo thêm hồ sơ.'); setSavedToken(optedIn ? poolToken : ''); setJob(null); setCvName('');
+      setSuccess('Đã tiếp nhận hồ sơ; CV sẽ được xử lý và chấm điểm theo bộ tiêu chí của vị trí. Gửi lại cùng yêu cầu không tạo thêm hồ sơ.'); setSavedToken(optedIn ? poolToken : ''); setJob(null); setCvName('');
     } catch { setError(careersFailure(null, null)); }
     finally { setBusy(false); }
   };
@@ -171,7 +178,6 @@ export default function CareersPage() {
       sx={{ mb: 2 }}
     />
 
-    <Alert severity="warning" sx={{ mb: 3 }}>{t('Chỉ kiểm thử với CV và thông tin tổng hợp, email dạng @example.test. Không gửi thông tin cá nhân hoặc CV thật.')}</Alert>
     {error && <Alert severity="error" sx={{ mb: 2 }} action={!job ? <Button color="inherit" onClick={() => void load(null)}>{t('Thử lại')}</Button> : undefined}>{t(error)}</Alert>}
     {success && <Alert severity="success" sx={{ mb: 2 }}>{t(success)}</Alert>}
     {savedToken && <Alert severity="info" sx={{ mb: 2 }}>
@@ -295,13 +301,13 @@ export default function CareersPage() {
       <Box component="form" onSubmit={apply} noValidate>
         <Stack spacing={2}>
           <Typography variant="h3" sx={{ fontSize: { xs: 17, md: 19 }, fontWeight: 700 }}>{t('Nộp hồ sơ cho vị trí này')}</Typography>
-          <TextField disabled={busy} name="name" label={t('Tên tổng hợp')} required fullWidth autoComplete="name" inputProps={{ maxLength: 200 }} />
-          <TextField disabled={busy} name="email" type="email" label={t('Email tổng hợp @example.test')} required fullWidth autoComplete="email" inputProps={{ maxLength: 254 }} />
-          <TextField disabled={busy} name="phone" type="tel" label={t('Điện thoại tổng hợp (tùy chọn)')} fullWidth autoComplete="tel" inputProps={{ maxLength: 50 }} />
+          <TextField disabled={busy} name="name" label={t('Tên ứng viên')} required fullWidth autoComplete="name" inputProps={{ maxLength: 200 }} />
+          <TextField disabled={busy} name="email" type="email" label={t('Email')} required fullWidth autoComplete="email" inputProps={{ maxLength: 254 }} />
+          <TextField disabled={busy} name="phone" type="tel" label={t('Điện thoại')} fullWidth autoComplete="tel" inputProps={{ maxLength: 50 }} />
           {/* Chọn tệp bằng nút lớn thay vì input mặc định của trình duyệt: trên điện
               thoại ô file gốc bé, khó bấm và không hiện tên tệp đã chọn. */}
           <Box>
-            <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>{t('CV tổng hợp PDF hoặc DOCX, tối đa 10 MB')}</Typography>
+            <Typography variant="body2" sx={{ mb: 1, fontWeight: 600 }}>{t('CV PDF hoặc DOCX, tối đa 10 MB')}</Typography>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
               <Button component="label" variant="outlined" disabled={busy} sx={{ minHeight: 44 }} data-testid="careers-cv-pick">
                 {t('Chọn tệp CV')}
@@ -320,14 +326,27 @@ export default function CareersPage() {
               </Typography>
             </Stack>
           </Box>
-          <FormControlLabel control={<Checkbox disabled={busy} checked={optedIn} onChange={e => setOptedIn(e.target.checked)} />} label={t('Tôi riêng biệt đồng ý tham gia Talent Pool thử nghiệm trong 7 ngày. Không bắt buộc để nộp.')} />
+          {/* Một câu, BẮT BUỘC: đồng ý nộp hồ sơ và đồng ý việc lưu hồ sơ 12 tháng
+              là một hành động, không tách được — nộp hồ sơ mà không được giữ hồ sơ
+              thì không tuyển được. Trước đây câu này nói về Talent Pool 7 ngày và
+              là tuỳ chọn, trong khi khối bên dưới lại là lựa chọn tái sử dụng hồ sơ;
+              gộp hai chỗ làm một để ứng viên chỉ phải trả lời một lần. */}
+          <FormControlLabel
+            control={<Checkbox disabled={busy} checked={optedIn} onChange={e => setOptedIn(e.target.checked)} required />}
+            label={<Typography variant="body2">
+              {t('Tôi đồng ý nộp hồ sơ và đồng ý để VinCareer lưu giữ hồ sơ trong 12 tháng kể từ ngày nộp, phục vụ các nhu cầu tuyển dụng của VinCareer. Tôi có thể yêu cầu rút lại sự đồng ý này bất cứ lúc nào bằng mã rút hiển thị sau khi gửi.')}
+            </Typography>}
+          />
+          {consentMissing && <Alert severity="info" sx={{ mb: 1 }}>
+            {t('Bạn cần đọc và đồng ý câu trên trước khi gửi hồ sơ.')}
+          </Alert>}
           {optedIn && <Alert severity="info" sx={{ overflowWrap: 'anywhere' }}>
             <Typography variant="body2">{t('Mã rút lựa chọn (sao chép trước khi gửi; nếu mất kết nối hãy giữ nguyên form để thử lại):')} <Box component="code" sx={{ overflowWrap: 'anywhere' }}>{poolToken}</Box></Typography>
             <Typography variant="body2">{t('Dùng tại /pool-withdraw; rút không tự xóa hồ sơ ứng tuyển.')}</Typography>
           </Alert>}
           <Typography variant="body2">{t('Nếu gặp lỗi sau khi gửi, giữ nguyên form và mã rút để thử lại. Một yêu cầu mới có thể tạo thêm hồ sơ; hệ thống chưa tự phát hiện mọi hồ sơ trùng.')}</Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-            <Button type="submit" variant="contained" disabled={busy} sx={{ minHeight: 44 }}>{t('Gửi hồ sơ thử nghiệm')}</Button>
+            <Button type="submit" variant="contained" disabled={busy} sx={{ minHeight: 44 }}>{t('Gửi hồ sơ')}</Button>
             <Button type="button" disabled={busy} onClick={() => { setJob(null); setCvName(''); }} sx={{ minHeight: 44 }}>{t('Hủy')}</Button>
           </Stack>
         </Stack>

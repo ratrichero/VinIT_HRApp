@@ -363,7 +363,6 @@
   " · mới nhất": " · latest",
   "Chưa có mô tả công việc.": "No job description yet.",
   "Vị trí đang tuyển dụng": "Open positions",
-  "Chỉ kiểm thử với CV và thông tin tổng hợp, email dạng @example.test. Không gửi thông tin cá nhân hoặc CV thật.": "Synthetic CVs and details only, with @example.test emails. Do not submit personal information or a real CV.",
   "Không thể tải danh sách vị trí. Vui lòng thử lại sau.": "Could not load the position list. Please try again later.",
   "Không thể tải danh sách vị trí.": "Could not load the position list.",
   "Đã tiếp nhận yêu cầu thử nghiệm; CV vẫn cần được xử lý. Gửi lại cùng yêu cầu không tạo thêm hồ sơ.": "Test request received; the CV still needs processing. Resending the same request does not create another application.",
@@ -376,12 +375,7 @@
   "Đang tải": "Loading",
   "Xem thêm": "Load more",
   "Ứng tuyển thử nghiệm: {0}": "Test application: {0}",
-  "Tên tổng hợp": "Synthetic name",
-  "Email tổng hợp @example.test": "Synthetic email @example.test",
-  "Điện thoại tổng hợp (tùy chọn)": "Synthetic phone (optional)",
-  "CV tổng hợp PDF hoặc DOCX, tối đa 10 MB": "Synthetic CV, PDF or DOCX, up to 10 MB",
   "Chưa chọn tệp nào.": "No file selected.",
-  "Tôi riêng biệt đồng ý tham gia Talent Pool thử nghiệm trong 7 ngày. Không bắt buộc để nộp.": "I separately consent to join the synthetic Talent Pool for 7 days. Not required to submit.",
   "Mã rút lựa chọn (sao chép trước khi gửi; nếu mất kết nối hãy giữ nguyên form để thử lại):": "Opt-in withdrawal code (copy it before sending; if the connection drops, keep the form to retry):",
   "Dùng tại /pool-withdraw; rút không tự xóa hồ sơ ứng tuyển.": "Use it at /pool-withdraw; withdrawing does not delete the application.",
   "Nếu gặp lỗi sau khi gửi, giữ nguyên form và mã rút để thử lại. Một yêu cầu mới có thể tạo thêm hồ sơ; hệ thống chưa tự phát hiện mọi hồ sơ trùng.": "If an error occurs after sending, keep the form and the withdrawal code to retry. A new request can create another application; duplicate detection is not complete.",
@@ -2088,5 +2082,11 @@
   "Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.": "Fix the position title, headcount and location before saving.",
   "chưa có ngưỡng — chọn bậc bằng/số năm/mức ngoại ngữ trước khi lưu.": "no threshold yet — pick the degree level / years / language level before saving.",
   "Tiêu chí này chưa có ngưỡng. Chọn bậc bằng/số năm/mức ngoại ngữ ở dưới rồi mới lưu được.": "This criterion has no threshold yet. Pick the degree level / years / language level below before it can be saved.",
-  "Trình duyệt này quá cũ để gửi hồ sơ an toàn. Hãy dùng trình duyệt mới hơn.": "This browser is too old to submit an application securely. Please use a newer browser."
+  "Trình duyệt này quá cũ để gửi hồ sơ an toàn. Hãy dùng trình duyệt mới hơn.": "This browser is too old to submit an application securely. Please use a newer browser.",
+  "CV PDF hoặc DOCX, tối đa 10 MB": "CV, PDF or DOCX, up to 10 MB",
+  "Gửi hồ sơ": "Submit application",
+  "Tôi đồng ý nộp hồ sơ và đồng ý để VinCareer lưu giữ hồ sơ trong 12 tháng kể từ ngày nộp, phục vụ các nhu cầu tuyển dụng của VinCareer. Tôi có thể yêu cầu rút lại sự đồng ý này bất cứ lúc nào bằng mã rút hiển thị sau khi gửi.": "I agree to submit my application and to VinCareer retaining it for 12 months from the submission date, for VinCareer recruitment purposes. I can withdraw this consent at any time using the withdrawal code shown after submission.",
+  "Bạn cần đọc và đồng ý câu trên trước khi gửi hồ sơ.": "You need to read and accept the statement above before submitting.",
+  "Đã tiếp nhận hồ sơ; CV sẽ được xử lý và chấm điểm theo bộ tiêu chí của vị trí. Gửi lại cùng yêu cầu không tạo thêm hồ sơ.": "Application received; the CV will be processed and scored against the position’s criteria. Resending the same request does not create another application.",
+  "Địa chỉ email không hợp lệ": "That email address is not valid."
 }

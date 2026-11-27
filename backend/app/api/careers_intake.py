@@ -21,7 +21,14 @@ from app.services.malware_scan import ScanVerdict, scan_bytes
 from app.services.talent_pool import create_consent
 
 router = APIRouter()
-TEST_NOTICE = 'synthetic-intake-test-v1'
+# Phiên bản thông báo consent được ghi vào bảng bằng chứng. Đổi số này khi câu
+# chữ trên form đổi nghĩa — nhờ vậy về sau tra được ứng viên đã đồng ý với bản
+# nào, chứ không phải "đồng ý" chung chung.
+CONSENT_NOTICE = 'careers-apply-retention-12m-v1'
+# Hồ sơ được lưu 12 tháng kể từ lúc nộp, để dùng cho các nhu cầu tuyển dụng sau.
+# Đây là con số đã cam kết với ứng viên bằng câu chữ trên form; sửa một bên mà
+# không sửa bên kia là nói một đằng làm một nẻo.
+RETENTION_DAYS = 365
 
 
 def _fingerprint(request_id, position_id, name, email, phone, filename, data, pool_token):
@@ -39,16 +46,29 @@ async def apply(position_id: UUID, request_id: UUID = Form(...), name: str = For
     # Không chặn cứng khi thiếu socket. Quyết định có nhận tệp chưa quét hay
     # không nằm ở điều kiện cờ bên dưới, cùng một chỗ với bước quét — nếu tách
     # làm hai nơi, có ngày một bên đổi mà bên kia không.
+    # Lưu ý về hai cờ khác nhau ở đây, vì dễ nhầm khi đọc lướt:
+    #
+    #  * BẰNG CHỨNG consent (`talent_pool_consents`) được ghi cho MỌI hồ sơ —
+    #    câu đồng ý trên form đã gộp việc đồng ý nộp và đồng ý lưu 12 tháng, và
+    #    nộp hồ sơ là đã đồng ý. Ghi bằng chứng là việc của DB, không phụ thuộc
+    #    `TALENT_POOL_STORAGE_READY`.
+    #  * LỰA CHỌN tái sử dụng hồ sơ cho vị trí khác (`pool_opt_in`) mới cần
+    #    Storage/Rediscovery sẵn sàng, vì nó mở đường HR tìm lại hồ sơ.
+    #
+    # Nếu gắn chặn 503 vào *bằng chứng consent* thì khi cờ tắt, mọi hồ sơ đều bị
+    # từ chối — một câu đồng ý bắt buộc làm sập cả form. Đó là lý do điều kiện
+    # dưới đây chỉ xét `pool_opt_in`.
     if pool_opt_in and not settings.TALENT_POOL_STORAGE_READY:
         raise HTTPException(503, 'Talent Pool chưa sẵn sàng')
     name, phone = name.strip(), phone.strip()
     try:
-        email = validate_email(email.strip(), check_deliverability=False, test_environment=True).normalized.lower()
+        # `check_deliverability=False`: không gọi DNS từ đường nộp hồ sơ. Vừa
+        # chậm, vừa để lộ việc hệ thống đi hỏi bản ghi MX của tên miền ứng viên.
+        email = validate_email(email.strip(), check_deliverability=False).normalized.lower()
     except EmailNotValidError:
-        raise HTTPException(400, 'Thông tin ứng viên không hợp lệ') from None
-    if (not name or len(name) > 200 or len(phone) > 50 or len(email) > 254
-            or not email.endswith('@example.test')):
-        raise HTTPException(400, 'Vòng thử nghiệm chỉ chấp nhận dữ liệu tổng hợp với email @example.test')
+        raise HTTPException(400, 'Địa chỉ email không hợp lệ') from None
+    if not name or len(name) > 200 or len(phone) > 50 or len(email) > 254:
+        raise HTTPException(400, 'Thông tin ứng viên không hợp lệ')
     if (pool_opt_in and not re.fullmatch(r'[0-9a-f]{64}', pool_token)) or (not pool_opt_in and pool_token):
         raise HTTPException(400, 'Mã rút lựa chọn không hợp lệ')
     filename = os.path.basename((cv.filename or '').replace('\\', '/'))[:200]
@@ -109,9 +129,9 @@ def _commit_intake(pos, req, digest, path, name, email, phone, filename, data, m
         if str(receipt['position_id']) != pos or receipt['fingerprint'] != digest:
             raise HTTPException(409, 'Mã yêu cầu đã được sử dụng cho nội dung khác')
         if receipt['state'] == 'COMMITTED':
-            return {'message': 'Hồ sơ thử nghiệm đã được tiếp nhận.'}
+            return {'message': 'Hồ sơ đã được tiếp nhận.'}
         if receipt['state'] == 'ABANDONED':
-            raise HTTPException(410, 'Yêu cầu thử nghiệm đã hết hạn, vui lòng tạo yêu cầu mới')
+            raise HTTPException(410, 'Yêu cầu đã hết hạn, vui lòng tạo yêu cầu mới')
         if (receipt['storage_backend'], receipt['storage_bucket'], receipt['storage_identity']) != (backend, bucket, identity):
             raise HTTPException(503, 'Cấu hình Storage đã thay đổi; cần đối soát')
         locked = db.execute(text('SELECT 1 FROM app_private.positions WHERE position_id=:id FOR UPDATE'), {'id': pos}).first()
@@ -146,10 +166,20 @@ def _commit_intake(pos, req, digest, path, name, email, phone, filename, data, m
         db.execute(text("INSERT INTO app_private.document_processing_runs(document_id,operation_id,extraction_type,status) VALUES (:doc,:op,'INITIAL_EXTRACTION','PENDING')"), {'doc': document, 'op': operation})
         db.execute(text("""INSERT INTO app_private.cv_batch_items(batch_id,original_filename,declared_mime_type,detected_mime_type,size_bytes,validation_result,application_id)
             VALUES (:batch,:name,:declared,:mime,:size,'ACCEPTED',:app)"""), {'batch': batch, 'name': filename, 'declared': declared_type, 'mime': mime, 'size': len(data), 'app': application})
-        if pool_opt_in:
-            expiry = datetime.now(timezone.utc) + timedelta(days=7)
-            create_consent(db, application_id=str(application), notice_version=TEST_NOTICE,
-                           consent_expires_at=expiry, retention_expires_at=expiry, withdrawal_token=pool_token)
+        # Bằng chứng consent được ghi cho MỌI hồ sơ, không chỉ khi tick chọn
+        # Talent Pool: câu đồng ý trên form đã gộp hai việc (đồng ý nộp + đồng ý
+        # lưu 12 tháng để dùng cho nhu cầu tuyển dụng sau), và gửi form là đã
+        # tick câu đó. Bản ghi này là thứ trả lời được "ứng viên đồng ý với bản
+        # thông báo nào, đến khi nào thì xoá" khi có yêu cầu xoá hoặc khi audit.
+        #
+        # Token rút chỉ tồn tại khi ứng viên chọn tham gia Talent Pool — nó là
+        # công cụ rút KHỎI danh sách tái sử dụng, không phải điều kiện để lưu
+        # hồ sơ. Máy chủ vẫn tự sinh token ngẫu nhiên khi không có (nó không bao
+        # giờ trả token đó ra ngoài), để mỗi dòng consent giữ được tính duy nhất.
+        expiry = datetime.now(timezone.utc) + timedelta(days=RETENTION_DAYS)
+        create_consent(db, application_id=str(application), notice_version=CONSENT_NOTICE,
+                       consent_expires_at=expiry, retention_expires_at=expiry,
+                       withdrawal_token=pool_token or None)
         db.execute(text("""UPDATE app_private.careers_intake_receipts SET state='COMMITTED',application_id=:app,updated_at=clock_timestamp() WHERE request_id=:req"""), {'app': application, 'req': req})
         db.execute(text("""INSERT INTO app_private.audit_events(action_type,object_type,object_id,position_id,outcome,metadata)
             VALUES ('CAREERS_TEST_APPLY','APPLICATION',:app,:pos,'SUCCESS',jsonb_build_object('source',CAST(:source AS text)))"""), {'app': application, 'pos': pos, 'source': source})
@@ -162,7 +192,7 @@ def _commit_intake(pos, req, digest, path, name, email, phone, filename, data, m
                         jsonb_build_object('source',CAST(:source AS text),'document_id',CAST(:doc AS text),'reason','SCANNER_UNAVAILABLE'))"""),
                 {'app': application, 'pos': pos, 'source': source, 'doc': str(document)})
         db.commit()
-        return {'message': 'Hồ sơ thử nghiệm đã được tiếp nhận.'}
+        return {'message': 'Hồ sơ đã được tiếp nhận.'}
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, 'Yêu cầu hoặc mã rút lựa chọn đã được sử dụng') from None
