@@ -12,7 +12,6 @@ kiểm tra 403 — chỉ đường list là thiếu, và không test nào khoá.
 Test này dựng DB giả, không cần PostgreSQL: nó kiểm **quyết định** (có ném 403
 hay không, và có thêm mệnh đề lọc vào SQL hay không), không kiểm dữ liệu trả về.
 """
-import datetime as dt
 import uuid
 from unittest.mock import patch
 
