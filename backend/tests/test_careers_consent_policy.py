@@ -88,21 +88,27 @@ def test_retention_window_is_twelve_months():
     )
 
 
-def test_consent_is_written_for_every_application_not_only_opt_in():
-    """Bằng chứng consent không được nằm trong `if pool_opt_in:`.
+def test_consent_is_written_for_every_self_submitted_application():
+    """Bằng chứng consent: mọi hồ sơ TỰ NỘP, không phụ thuộc opt-in.
 
-    Câu đồng ý trên form là bắt buộc và đã gộp hai mục đích, nên mọi hồ sơ đều
-    phải có dòng consent. Nếu vẫn nằm trong nhánh `if`, hồ sơ không tick pool
-    sẽ không có bằng chứng — và câu đồng ý bắt buộc trở thành lời hứa suông.
+    Câu đồng ý trên form là bắt buộc và đã gộp hai mục đích, nên hồ sơ không
+    tick chọn Talent Pool vẫn phải có dòng consent — nếu không, câu đồng ý bắt
+    buộc thành lời hứa suông với phần lớn hồ sơ.
     """
     require = inspect.getsource(careers_intake._commit_intake)
     assert 'create_consent(' in require, 'không còn ghi consent'
-    # Tìm khối `if ...:` ngay trước lời gọi; nếu là `if pool_opt_in` thì sai.
+    # Tìm khối `if ...:` ngay trước lời gọi; `if pool_opt_in` là sai.
     before = require[:require.index('create_consent(')]
-    last_lines = [line for line in before.strip().splitlines()[-4:] if line.strip()]
+    last_lines = [line for line in before.strip().splitlines()[-6:] if line.strip()]
     assert not any('if pool_opt_in' in line for line in last_lines), (
         'create_consent vẫn nằm trong nhánh `if pool_opt_in` — hồ sơ không chọn '
         'pool sẽ không có bằng chứng đồng ý'
+    )
+    # Nhưng phải có điều kiện theo NGUỒN: hồ sơ nhập từ hộp thư (EMAIL_TEST)
+    # không được ghi consent, vì ứng viên chưa từng thấy câu đồng ý nào.
+    assert "if source == 'CAREERS'" in require, (
+        'thiếu ranh giới theo nguồn — hồ sơ từ Gmail sẽ bị ghi "đã đồng ý" '
+        'dù ứng viên chưa hề đồng ý'
     )
 
 

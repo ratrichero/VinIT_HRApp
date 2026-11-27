@@ -175,20 +175,27 @@ def _commit_intake(pos, req, digest, path, name, email, phone, filename, data, m
         db.execute(text("INSERT INTO app_private.document_processing_runs(document_id,operation_id,extraction_type,status) VALUES (:doc,:op,'INITIAL_EXTRACTION','PENDING')"), {'doc': document, 'op': operation})
         db.execute(text("""INSERT INTO app_private.cv_batch_items(batch_id,original_filename,declared_mime_type,detected_mime_type,size_bytes,validation_result,application_id)
             VALUES (:batch,:name,:declared,:mime,:size,'ACCEPTED',:app)"""), {'batch': batch, 'name': filename, 'declared': declared_type, 'mime': mime, 'size': len(data), 'app': application})
-        # Bằng chứng consent được ghi cho MỌI hồ sơ, không chỉ khi tick chọn
-        # Talent Pool: câu đồng ý trên form đã gộp hai việc (đồng ý nộp + đồng ý
-        # lưu 12 tháng để dùng cho nhu cầu tuyển dụng sau), và gửi form là đã
-        # tick câu đó. Bản ghi này là thứ trả lời được "ứng viên đồng ý với bản
-        # thông báo nào, đến khi nào thì xoá" khi có yêu cầu xoá hoặc khi audit.
+        # Bằng chứng consent: chỉ ghi cho hồ sơ **ứng viên tự nộp** qua form
+        # công khai, không phụ thuộc việc có tick chọn Talent Pool.
+        #
+        # Câu đồng ý trên form đã gộp hai việc (đồng ý nộp + đồng ý lưu 12
+        # tháng), và gửi form là đã tick câu đó. Bản ghi này trả lời được "ứng
+        # viên đồng ý với bản thông báo nào, đến khi nào thì xoá".
+        #
+        # KHÔNG ghi cho `source='EMAIL_TEST'`: hồ sơ đó được nhập từ hộp thư,
+        # ứng viên chưa từng thấy form và chưa từng đồng ý điều gì. Ghi một dòng
+        # "đã đồng ý" cho họ là tạo bằng chứng không có thật — tệ hơn nhiều so
+        # với việc không có bằng chứng, vì nó nói dối đúng chỗ cần trung thực.
         #
         # Token rút chỉ tồn tại khi ứng viên chọn tham gia Talent Pool — nó là
         # công cụ rút KHỎI danh sách tái sử dụng, không phải điều kiện để lưu
-        # hồ sơ. Máy chủ vẫn tự sinh token ngẫu nhiên khi không có (nó không bao
-        # giờ trả token đó ra ngoài), để mỗi dòng consent giữ được tính duy nhất.
-        expiry = datetime.now(timezone.utc) + timedelta(days=RETENTION_DAYS)
-        create_consent(db, application_id=str(application), notice_version=CONSENT_NOTICE,
-                       consent_expires_at=expiry, retention_expires_at=expiry,
-                       withdrawal_token=pool_token or None)
+        # hồ sơ. Máy chủ tự sinh token ngẫu nhiên khi không có (không bao giờ
+        # trả token đó ra ngoài), để mỗi dòng consent giữ được tính duy nhất.
+        if source == 'CAREERS':
+            expiry = datetime.now(timezone.utc) + timedelta(days=RETENTION_DAYS)
+            create_consent(db, application_id=str(application), notice_version=CONSENT_NOTICE,
+                           consent_expires_at=expiry, retention_expires_at=expiry,
+                           withdrawal_token=pool_token or None)
         db.execute(text("""UPDATE app_private.careers_intake_receipts SET state='COMMITTED',application_id=:app,updated_at=clock_timestamp() WHERE request_id=:req"""), {'app': application, 'req': req})
         db.execute(text("""INSERT INTO app_private.audit_events(action_type,object_type,object_id,position_id,outcome,metadata)
             VALUES ('CAREERS_TEST_APPLY','APPLICATION',:app,:pos,'SUCCESS',jsonb_build_object('source',CAST(:source AS text)))"""), {'app': application, 'pos': pos, 'source': source})
