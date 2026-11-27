@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Alert, Box, Button, Stack, Typography } from '@mui/material';
 import apiClient from '@/lib/api';
+import { newRequestId } from '@/lib/browserIds';
 
 export default function EmailDemo() {
   const [file, setFile] = useState<File | null>(null);
@@ -24,7 +25,7 @@ export default function EmailDemo() {
     <Stack spacing={2} sx={{ maxWidth: 700 }}>
       <Alert severity="warning">Chỉ dùng tệp EML tổng hợp; không kết nối Gmail, không có quét mã độc và không sử dụng dữ liệu thật.</Alert>
       <Typography>Tải một email giả với đúng một mã vị trí trong tiêu đề và một CV tổng hợp đính kèm. HR cần quyền trên vị trí; vị trí cần OPEN, còn hạn và rubric được duyệt.</Typography>
-      <label>Chọn email giả (.eml) <input type="file" accept=".eml,message/rfc822" onChange={e => { setFile(e.target.files?.[0] || null); setRequestId(crypto.randomUUID()); setResult(''); setError(''); }} /></label>
+      <label>Chọn email giả (.eml) <input type="file" accept=".eml,message/rfc822" onChange={e => { setFile(e.target.files?.[0] || null); setRequestId(newRequestId() || ''); setResult(''); setError(''); }} /></label>
       <Button variant="contained" disabled={!file || busy} onClick={submit}>Tiếp nhận demo</Button>
       {result && <Alert severity="info">{result}</Alert>}{error && <Alert severity="error">{error}</Alert>}
     </Stack>

@@ -366,7 +366,6 @@
   "Chỉ kiểm thử với CV và thông tin tổng hợp, email dạng @example.test. Không gửi thông tin cá nhân hoặc CV thật.": "Synthetic CVs and details only, with @example.test emails. Do not submit personal information or a real CV.",
   "Không thể tải danh sách vị trí. Vui lòng thử lại sau.": "Could not load the position list. Please try again later.",
   "Không thể tải danh sách vị trí.": "Could not load the position list.",
-  "Trình duyệt không hỗ trợ tạo mã an toàn; cần HTTPS.": "This browser cannot create a secure code; HTTPS is required.",
   "Đã tiếp nhận yêu cầu thử nghiệm; CV vẫn cần được xử lý. Gửi lại cùng yêu cầu không tạo thêm hồ sơ.": "Test request received; the CV still needs processing. Resending the same request does not create another application.",
   "Mã rút lựa chọn thử nghiệm:": "Test opt-in withdrawal code:",
   "Lưu mã và dùng tại /pool-withdraw.": "Save it and use it at /pool-withdraw.",
@@ -2088,5 +2087,6 @@
   "Đã lấy từ": "Copied from",
   "Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.": "Fix the position title, headcount and location before saving.",
   "chưa có ngưỡng — chọn bậc bằng/số năm/mức ngoại ngữ trước khi lưu.": "no threshold yet — pick the degree level / years / language level before saving.",
-  "Tiêu chí này chưa có ngưỡng. Chọn bậc bằng/số năm/mức ngoại ngữ ở dưới rồi mới lưu được.": "This criterion has no threshold yet. Pick the degree level / years / language level below before it can be saved."
+  "Tiêu chí này chưa có ngưỡng. Chọn bậc bằng/số năm/mức ngoại ngữ ở dưới rồi mới lưu được.": "This criterion has no threshold yet. Pick the degree level / years / language level below before it can be saved.",
+  "Trình duyệt này quá cũ để gửi hồ sơ an toàn. Hãy dùng trình duyệt mới hơn.": "This browser is too old to submit an application securely. Please use a newer browser."
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { careersFailure } from '@/lib/syntheticIntake';
 import { filterJobs } from '@/lib/careersFilter';
+import { newPoolToken, newRequestId } from '@/lib/browserIds';
 import { useI18n } from '@/i18n/I18nProvider';
 import LanguageSwitcher from '@/i18n/LanguageSwitcher';
 import { Alert, Box, Button, Card, CardContent, Checkbox, CircularProgress, Container, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
@@ -106,11 +107,20 @@ export default function CareersPage() {
   };
 
   const selectJob = (selected: Job) => {
-    if (!globalThis.crypto?.randomUUID || !globalThis.crypto?.getRandomValues) {
-      setError('Trình duyệt không hỗ trợ tạo mã an toàn; cần HTTPS.'); return;
+    // `crypto.randomUUID()` chỉ có trong secure context; mở trang qua
+    // `http://<ip-vps>:3005` thì nó vắng mặt, dù `crypto.getRandomValues()` —
+    // nguồn ngẫu nhiên mật mã học của cùng trình duyệt — vẫn chạy bình thường.
+    // Chặn ở đây từng làm cả form ứng tuyển không mở được trên VPS chưa có
+    // HTTPS, trong khi không có gì thực sự thiếu. Xem `lib/browserIds.ts`.
+    const requestIdValue = newRequestId();
+    const poolTokenValue = newPoolToken();
+    if (!requestIdValue || !poolTokenValue) {
+      // Chỉ còn lại trình duyệt không có nguồn ngẫu nhiên nào. Câu báo không
+      // được đổ cho HTTPS nữa — nói đúng thứ cần nói.
+      setError('Trình duyệt này quá cũ để gửi hồ sơ an toàn. Hãy dùng trình duyệt mới hơn.'); return;
     }
-    setRequestId(crypto.randomUUID());
-    setPoolToken(Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join(''));
+    setRequestId(requestIdValue);
+    setPoolToken(poolTokenValue);
     setJob(selected); setOptedIn(false); setSavedToken(''); setError(''); setSuccess(''); setCvName('');
     // Đưa form vào tầm nhìn: trên trang dài, bấm vào tin ở cuối danh sách mà
     // form mở ở đầu trang thì người dùng tưởng nút không có tác dụng.
