@@ -63,6 +63,9 @@ const json = (route, body, status = 200) => route.fulfill({ status, contentType:
       if (path === '/v1/dashboard/summary') return json(route, { total_applications: 0 });
       // Badge "việc cần làm" trên header gọi work-queue ở mọi trang đã đăng nhập.
       if (path === '/v1/dashboard/work-queue') return json(route, { generated_at: '2026-11-19T03:00:00Z', summary: {}, items: [] });
+      // Chuông thông báo (arena) hỏi hộp thư ngay khi mount, và mỗi 60 giây.
+      // Hộp thư rỗng: test này kiểm tài khoản, không kiểm thông báo.
+      if (path === '/v1/notifications' && method === 'GET') return json(route, { items: [], unread_count: 0 });
       // Tạo vị trí xong là sinh bộ tiêu chí nháp luôn (luồng mới); thiếu route này
       // thì trang tạo vị trí đứng lại ở /positions/new và không chuyển trang.
       if (path === '/v1/criteria/generate/position-id' && method === 'POST') {

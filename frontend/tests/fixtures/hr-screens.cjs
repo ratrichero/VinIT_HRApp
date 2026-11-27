@@ -428,10 +428,19 @@ function installMockApi(context, overrides = {}) {
     if (p === '/v1/shortlist/shared-with-me') return json([]);
     if (p === '/v1/dashboard/work-queue') return json(workQueue);
     if (p === '/v1/scorecards/reminders') return json([]);
+    // Chuông thông báo trong AppLayout hỏi hộp thư ngay khi mount (và mỗi 60s).
+    // Hộp thư rỗng: các e2e này không kiểm thông báo, và số 0 không đổi bố cục.
+    if (p === '/v1/notifications' && r.request().method() === 'GET') return json({ items: [], unread_count: 0 });
     if (p === '/v1/positions' && r.request().method() === 'GET') return json([POSITION]);
     if (p === '/v1/positions/p1') return json(POSITION);
     if (p === '/v1/assessments/ranking/latest/p1') return json(ranking);
     if (p === '/v1/applications') return json(applications);
+    // Khối "Lịch phỏng vấn" trong hồ sơ gọi danh sách buổi phỏng vấn ngay khi
+    // mount. Thiếu route này thì mọi e2e đi qua trang hồ sơ đều thấy thêm một
+    // request lạ (`GET /v1/interviews`) và đỏ ở assert "không gọi endpoint lạ"
+    // — lỗi của mock, không phải của trang. Trả rỗng: các e2e này không kiểm
+    // lịch phỏng vấn, và danh sách rỗng không đổi bố cục trang.
+    if (p === '/v1/interviews' && r.request().method() === 'GET') return json([]);
     if (p === '/v1/operations/position/p1/active') return json(null);
     if (p === '/v1/positions/p1/duplicate-signals') return json(DUPLICATE_SIGNALS);
     if (p === '/v1/criteria/position/p1/approved') return json(RUBRIC);
