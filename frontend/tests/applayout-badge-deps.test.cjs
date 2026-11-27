@@ -38,3 +38,19 @@ test('có chốt chặn chống gọi lại liên tục', () => {
   assert.match(src, /workQueueFetchedAt\s*=\s*useRef\(0\)/, 'mất useRef chốt thời gian');
   assert.match(badgeEffect(), /workQueueFetchedAt\.current < 30_000/, 'mất kiểm tra giãn cách 30 giây');
 });
+
+test('đổi hồ sơ trong cùng danh sách không hỏi lại badge', () => {
+  // Thêm `pathname` vào deps (test trên) sửa lỗi badge đứng im, nhưng `pathname`
+  // đổi cả khi chỉ bấm `n` sang hồ sơ khác trong CÙNG vị trí — quyền và phạm vi
+  // badge y nguyên. Không có chốt này thì mỗi lần bấm `n` (sau 30 giây) lại tốn
+  // một request; freebuff đo được đúng ca đó ở `profile-transition-requests`.
+  // Hai test phải cùng đúng — nên chốt phải dựa trên "màn hình", không phải
+  // "đường dẫn đầy đủ".
+  assert.match(src, /badgeScreenRef\s*=\s*useRef/, 'mất chốt màn hình đã hỏi badge');
+  const effect = badgeEffect();
+  assert.match(effect, /pathname\.replace\([^)]*applicants/, 'phải bỏ mã hồ sơ ở cuối đường dẫn');
+  assert.match(effect, /badgeScreenRef\.current === badgeScreen/, 'phải so màn hình trước khi gọi');
+  // So sánh phải đứng TRƯỚC lần gọi API, nếu không thì chốt vô tác dụng.
+  assert.ok(effect.indexOf('badgeScreenRef.current === badgeScreen')
+    < effect.indexOf('getWorkQueue'), 'chốt phải kiểm trước khi gọi API');
+});

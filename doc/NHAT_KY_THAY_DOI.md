@@ -78,6 +78,35 @@ khi thiếu cờ `HRA_E2E_SYNTHETIC=1` (kèm `HRA_E2E_HEALTH_URL`, `HRA_E2E_FIXT
 **Chưa kiểm.** Ba test bị chặn cờ ở trên chưa chạy với cờ đầy đủ (cần backend + DB dùng-một-lần),
 nên chưa biết chúng xanh hay đỏ. Chưa sửa 15 test còn lại — mục này chỉ đo và phân loại.
 
+## 2026-11-27 (2) — Gộp nhánh freebuff vào arena: hai bên sửa cùng chỗ mà không xung đột
+
+**Việc đã làm.** `arena/ea6e2570-vinit-hrapp` merge `freebuff/1434fda45407dc1a68600843`
+(`b7fb4a6`) để hai nhánh cùng thấy mọi thay đổi. Bảy mục của
+`doc/AUDIT_2026-11-27_NANG_CAP_GAN_DAY.md` đã sửa xong ở phía arena (`eb48521`), nên
+nhánh này giờ có cả bản sửa lẫn bản audit của freebuff.
+
+**Không có xung đột về nội dung**, nhưng có một chỗ hai bên cùng chạm và cả hai đều đúng:
+
+- `AppLayout` — arena thêm `pathname` vào deps (badge không cập nhật khi đổi trang),
+  freebuff thêm `badgeScreenRef` (đổi hồ sơ trong cùng danh sách không nên hỏi lại).
+  Hai sửa bổ sung nhau; `tests/applayout-badge-deps.test.cjs` giờ khoá **cả hai** —
+  làm đúng một nửa thì test đỏ.
+- `tests/mock-api-server.cjs` — commit `7864b81` của arena (thêm `/v1/interviews` lọc
+  theo `application_id` để xem được panel hồ sơ) nằm **sau** mốc freebuff merge
+  (`0b23156`), nên bản của arena được giữ nguyên. Fixture `hr-screens.cjs` của freebuff
+  trả `[]` cho cùng đường dẫn và so khớp theo `pathname`, nên `?application_id=` vẫn
+  qua — hai mock không giẫm chân và không cần đồng bộ thêm.
+
+**Gates sau merge.** `test:unit` **231** pass / 0 fail, `test:i18n` 3 pass, `tsc` sạch,
+backend **732 passed / 181 skipped**, `ruff --select F` sạch trên đúng danh sách file
+CI quét.
+
+**Chưa kiểm.** E2E vẫn chưa chạy được ở sandbox arena: Playwright không tải được
+Chromium (chặn host), và CI cũng không chạy e2e. Nghĩa là ba test `finish-direct-advance`,
+`sticky-review-actions`, `profile-transition-requests` — thứ freebuff dùng để đo hai lần
+sửa trên — **chưa được chạy lại** ở phía arena. Bản thân chốt `badgeScreenRef` thì có
+test đọc mã khoá (đã đối chứng: gỡ chốt thì test đỏ).
+
 ## 2026-11-27 — Sau khi đồng bộ arena: mock thiếu hai route mới, và badge không được hỏi lại khi đổi hồ sơ
 
 **Vấn đề.** Đồng bộ nhánh arena (46 commit) làm ba e2e `finish-direct-advance`,
