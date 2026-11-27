@@ -33,6 +33,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   // endpoint; trang dashboard tự tải dữ liệu của nó nên không cần badge ở đó.
   const [workCount, setWorkCount] = useState<number | null>(null);
   const workQueueFetchedAt = useRef(0);
+  // Màn hình đã hỏi badge lần cuối. Chuyển giữa các hồ sơ trong cùng danh sách
+  // chỉ đổi id cuối đường dẫn: quyền và phạm vi badge y nguyên, nên hỏi lại chỉ
+  // tốn một request (đo ở `tests/profile-transition-requests.cjs`: ở lại 32 giây
+  // rồi bấm `n` từng tải lại badge). Đổi màn hình thật thì vẫn hỏi lại.
+  const badgeScreenRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (['/', '/bootstrap', '/change-password', '/careers-demo', '/careers', '/pool-withdraw', '/demo'].includes(pathname)) { setIsLoading(false); setAuthenticated(false); return; }
@@ -68,7 +73,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authenticated) { setWorkCount(null); return; }
     if (pathname === '/dashboard') return;
+    // Bỏ id hồ sơ ở cuối đường dẫn — `n` đổi hồ sơ chứ không đổi màn hình.
+    const badgeScreen = pathname.replace(/^(.*\/applicants)\/[^/]+$/, '$1');
+    if (badgeScreenRef.current === badgeScreen) return;
     if (Date.now() - workQueueFetchedAt.current < 30_000) return;
+    badgeScreenRef.current = badgeScreen;
     workQueueFetchedAt.current = Date.now();
     // Badge là phụ trợ: để trình duyệt rảnh rồi mới hỏi, không tranh với dữ liệu
     // của màn hình vừa mở.

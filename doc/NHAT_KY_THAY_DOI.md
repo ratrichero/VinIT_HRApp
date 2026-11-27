@@ -9,6 +9,59 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — Sau khi đồng bộ arena: mock thiếu hai route mới, và badge không được hỏi lại khi đổi hồ sơ
+
+**Vấn đề.** Đồng bộ nhánh arena (46 commit) làm ba e2e `finish-direct-advance`,
+`sticky-review-actions`, `profile-transition-requests` đỏ ở assert "không có request lạ". Nguyên
+nhân không nằm ở code trang: hai thành phần mới của arena gọi endpoint mà
+`tests/fixtures/hr-screens.cjs` chưa mock — `InterviewPanel` gọi `GET /v1/interviews` ngay khi
+mở hồ sơ, `NotificationBell` gọi `GET /v1/notifications` khi mount (và mỗi 60 giây). Mock trả
+`{}` cho đường dẫn lạ, nên đây là lỗi của fixture, không phải của trang.
+
+**Sửa.** Thêm hai route vào mock: `/v1/interviews` trả `[]`, `/v1/notifications` trả
+`{items: [], unread_count: 0}`. Danh sách rỗng là đúng ý: ba e2e này không kiểm lịch phỏng vấn
+lẫn hộp thư, và dữ liệu rỗng không đổi bố cục trang nên số đo cũ vẫn so sánh được.
+
+**Lỗi thứ hai lộ ra sau khi mock đủ.** `profile-transition-requests` đi tiếp được và đỏ ở dòng
+244: ở lại một hồ sơ 32 giây rồi bấm `n`, trang tải lại badge việc-cần-làm
+(`/v1/dashboard/work-queue`). Thủ phạm là thay đổi của arena trong `AppLayout`: thêm `pathname`
+vào deps của effect badge (sửa lỗi thật — trước đó badge chỉ cập nhật lúc đăng nhập). Nhưng
+`pathname` đổi cả khi chỉ đổi mã hồ sơ, nên sau 30 giây chốt giãn cách, mỗi lần bấm `n` lại tốn
+một request. Hai bên không thể cùng đúng: test unit mới của arena đòi `pathname` trong deps, e2e
+đòi không hỏi lại badge khi đổi hồ sơ trong cùng vị trí.
+
+**Sửa (2).** Giữ `pathname` trong deps, thêm chốt `badgeScreenRef`: bỏ mã hồ sơ ở cuối đường dẫn
+(`/positions/p1/applicants/app-2` → `/positions/p1/applicants`) rồi mới so. Đổi màn hình thật
+(dashboard → vị trí → lịch) vẫn cập nhật badge; đổi hồ sơ trong cùng danh sách thì không.
+
+**Đo** (ba e2e, 1440×900, mock, `app-2` còn 2 tiêu chí chờ):
+
+| Test | Trước khi sửa mock | Sau |
+| --- | --- | --- |
+| `finish-direct-advance` | đỏ: `['GET /v1/interviews']` (dòng 181) | pass: `{clean:{clicks:1, reviewPostsAtFinish:0, statusPatches:0}}` |
+| `sticky-review-actions` | đỏ: `['GET /v1/interviews']` (dòng 159) | pass: `OK` (390/768/1024/1440px) |
+| `profile-transition-requests` | đỏ: `['GET /v1/interviews']` (dòng 142) | pass |
+
+Sau khi thêm route `/v1/interviews` nhưng **chưa** thêm `/v1/notifications`, cả ba vẫn đỏ với
+`['GET /v1/notifications']` — đối chứng cho thấy mỗi route là một khoảng trống riêng, không phải
+một lỗi chung. Sau khi mock đủ, `profile-transition-requests` đỏ tiếp ở dòng 244 với
+`["/v1/applications/app-0","/v1/interviews","/v1/dashboard/work-queue","/v1/applications/app-2"]`;
+thêm chốt `badgeScreenRef` thì nhánh đó còn
+`{auth: 0, paths: ["/v1/applications/app-0", "/v1/interviews", "/v1/applications/app-2"]}` — mất
+đúng một request badge, không mất request nào khác.
+
+**Đã chạy.** Ba e2e trên (pass), `review-loop-metrics.cjs` (pass, `keyboardProfile` giữ nguyên
+`{keysPressed:4, deadKeys:0, finishByKey:true, clicksDuringFinish:0, shortcutsHelpOpened:true}`),
+`test:unit` **188 pass / 0 fail**, `test:i18n` 3 pass, `tsc --noEmit` sạch, `eslint` trên
+`AppLayout.tsx` sạch, `next build` exit 0.
+
+**Chưa kiểm.** Chưa chạy lại toàn bộ bộ e2e (chỉ ba test bị ảnh hưởng và script đo). Chưa nhìn
+tận mắt việc badge có cập nhật khi đi giữa các màn hình — đó là suy luận từ nhánh `badgeScreen`
+khác nhau, không phải phép đo. Hệ quả đã biết của chốt mới: đi từ danh sách ứng viên vào một hồ
+sơ trong **cùng** vị trí không làm mới badge nữa (trước đó có, sau thay đổi của arena); badge chỉ
+mới lại khi đổi màn hình hoặc sau 30 giây ở màn hình khác. Nếu muốn badge mới cả trong trường hợp
+này thì phải nới assert của `profile-transition-requests` — chưa làm vì yêu cầu là giữ nguyên assert.
+
 ## 2026-11-25 — Bàn phím đi trọn một hồ sơ: `f` hoàn tất, `?` mở bảng phím tắt
 
 **Vấn đề.** Bàn phím dừng ở tiêu chí cuối. Xác nhận hết tiêu chí bằng `1` xong, muốn bấm
