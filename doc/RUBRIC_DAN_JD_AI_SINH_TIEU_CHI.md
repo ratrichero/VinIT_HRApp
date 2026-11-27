@@ -110,7 +110,7 @@ Vào **Admin → AI**, bấm nút kiểm tra kết nối. Xanh là gọi đượ
 
 ---
 
-## Chỗ còn yếu — trạng thái sau khi sửa (a) và (b)
+## Chỗ còn yếu — trạng thái sau khi sửa (a), (b), (c)
 
 ### a) Prompt thiên về JD tiếng Anh — **ĐÃ SỬA** (`2ec87a2`)
 
@@ -151,36 +151,46 @@ sách rỗng.
 Đã kiểm ngược cả hai: khôi phục prompt cũ → 1 test đỏ; gỡ alias `"bắt buộc"` →
 3 test đỏ.
 
-### c) Gợi ý: phân biệt ba nguyên nhân lỗi
+### c) Lỗi AI nói được nguyên nhân — **ĐÃ SỬA** (`121601b`)
 
-Hiện mọi lỗi LLM đều thành một câu: *"Không thể sinh rubric bằng AI. Vui lòng kiểm tra cấu
-hình và thử lại."* Ba nguyên nhân rất khác nhau bị gộp làm một, và **cả ba đều là việc của
-Admin** — HR đọc câu đó không biết phải làm gì.
+Trước: mọi lỗi AI ra một câu *"Không thể sinh rubric bằng AI. Vui lòng kiểm tra cấu hình
+và thử lại."* — gộp ba tình huống đòi ba hành động khác hẳn, và HR **không có quyền sửa**
+hai trong ba.
 
-Điều đáng nói: hệ thống **đã có** hạ tầng phân loại lỗi, chỉ là nó không ra tới người dùng.
-`_call_llm` tính sẵn `failure_category` (`INVALID_JSON` / `HTTP_ERROR` / `NETWORK_ERROR` /
-`OTHER_ERROR`) và test-kết-nối đã có `error_code` sẵn (`AUTH_FAILED`, `RATE_LIMITED`,
-`CONNECT_ERROR`…). Nhưng `LLMError` là `class LLMError(Exception): pass` — **không mang mã
-nào cả**, nên tầng API không thể phân biệt.
+Gốc rễ không phải thiếu thông tin. `_call_llm_one` đã phân loại sẵn (`failure_category`)
+và test-kết-nối đã có `error_code`. Gốc rễ là hai chỗ:
 
-Đề xuất (nhỏ, ~1 buổi):
+1. `class LLMError(Exception): pass` — không mang mã nào.
+2. `_call_llm` ném lại `"All configured LLM routes failed"` khi thử hết route — **xoá luôn**
+   thứ vừa phân loại được.
 
-1. Thêm `code` vào `LLMError`, gán ở từng `except` đã có sẵn `failure_category`.
-2. Ở `rubric_library.py:353` và `criteria.py`, map mã sang ba câu khác nhau:
-   - `POLICY_BLOCKED` (chưa bật `ALLOW_EXTERNAL_API`) → *"Máy chủ chưa cho phép gọi AI ra
-     ngoài. Báo Quản trị viên bật `ALLOW_EXTERNAL_API`."*
-   - `AUTH_FAILED` / `NOT_FOUND` → *"Cấu hình AI sai hoặc khoá đã hết hạn. Báo Quản trị
-     viên kiểm tra ở Admin → AI."*
-   - `INVALID_JSON` / `RATE_LIMITED` / `TIMEOUT` → *"AI trả về không đọc được. Bấm thử lại;
-     vẫn lỗi thì báo Quản trị viên."*
-3. **Không trả chi tiết kỹ thuật thô** (status code, URL, tên model) ra giao diện HR —
-   chỉ trả mã và câu tiếng Việt.
+Nay `LLMError` mang `code` (mặc định `None`, không phải một mã chung — chưa phân loại được
+thì nói là chưa), và câu thông báo chia theo **việc HR phải làm**:
 
-Lưu ý: chỗ chặn `ALLOW_EXTERNAL_API` hiện ném `LLMError` chung chung ở `_check_endpoint_policy`
-(`llm_client.py:236-251`) và **lỗi này xảy ra trước khi có `try`** ở `_call_llm`, nên
-`failure_category` không bắt được. Muốn phân biệt được trường hợp này thì phải bắt riêng.
+| Nhóm | Mã | Câu cho HR |
+|---|---|---|
+| **Báo Quản trị viên** | `POLICY_BLOCKED` | chưa bật `ALLOW_EXTERNAL_API` trong `.env` máy chủ |
+| | `AUTH_FAILED` | khoá API sai, bị thu hồi hoặc hết hạn |
+| | `CONFIG_MISSING` / `CONFIG_INVALID` / `NOT_FOUND` | chưa cấu hình / sai địa chỉ / sai tên model |
+| **Thử lại** | `RATE_LIMITED` | bị giới hạn tốc độ, chờ rồi bấm lại |
+| | `TIMEOUT` / `NETWORK_ERROR` / `PROVIDER_ERROR` | mạng hoặc nhà cung cấp chập chờn |
+| | `INVALID_JSON` | AI trả JSON hỏng, thường chỉ một lần |
 
-### d) Gợi ý: nút "Lấy JD từ vị trí khác"
+`str(exc)` **không** được dùng làm thông báo: chuỗi đó có thể chứa status HTTP, địa chỉ
+endpoint, tên model — chỉ vào log.
+
+**Một lỗi thật phát hiện thêm:** `_check_endpoint_policy` nằm trong `_call_llm_one`, mà
+hàm đó có `@retry` 3 lần. Lỗi cấu hình **tất định** bị retry vô ích — đo thực tế **4.02
+giây** chờ rồi vẫn nhận đúng lỗi đó. Nay `_is_retryable()` loại `POLICY_BLOCKED`,
+`CONFIG_*`, `AUTH_FAILED`, `NOT_FOUND` khỏi retry (0.01s); lỗi mạng và 5xx vẫn retry 3
+lần như cũ.
+
+**Bài học đáng ghi lại:** test đầu tiên tôi viết **không** bắt được việc gỡ retry, vì nó
+đếm số request — mà `_check_endpoint_policy` chặn *trước khi mở kết nối*, nên số request
+luôn bằng 0 dù có retry hay không. Phải đo **thời gian chờ** mới phân biệt được. Một test
+"xanh" không có nghĩa là nó kiểm đúng thứ mình tưởng.
+
+### d) Gợi ý (CHƯA LÀM): nút "Lấy JD từ vị trí khác"
 
 Muốn dựng rubric cho "Backend Engineer" khi đã có vị trí "Backend Engineer (cũ)" thì phải
 mở vị trí cũ, copy JD, quay lại dán tay. Đường "Sinh từ JD của một vị trí" làm được nhưng
@@ -215,6 +225,7 @@ Vì sao đổ vào ô chứ không gọi thẳng API: HR phải thấy mình đa
 | Rủi ro chính? | ~~JD tiếng Việt bị prompt đẩy về tiếng Anh~~ — **đã sửa** (`2ec87a2`, prompt v2.2) |
 | Trước khi dùng cần gì? | `ALLOW_EXTERNAL_API=true` trong `.env` backend, rồi khởi động lại |
 | Kiểm thế nào? | Admin → AI → kiểm tra kết nối; hoặc dán thử một JD, xem có ra tiêu chí không |
+| Nếu AI lỗi? | Từ `121601b` câu lỗi nói rõ **báo Quản trị viên** hay **thử lại**, không còn câu chung |
 
 Đường đi khi anh test: **/rubrics → Sinh từ JD dán tay → chọn nhóm → dán JD → Sinh nháp
 → rà → Lưu bản nháp → `hr@vinuni.edu.vn` xuất bản**.
