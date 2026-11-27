@@ -27,6 +27,8 @@ const json = (r,b,s=200) => r.fulfill({status:s,contentType:'application/json',b
   if(p === '/v1/dashboard/summary') return json(r,{open_positions:0,total_applications:0,applications_by_status:{SHORTLIST:0},files_needing_hr_review:0});
   // Badge "việc cần làm" trên header gọi work-queue ở mọi trang đã đăng nhập.
   if(p === '/v1/dashboard/work-queue') return json(r,{generated_at:'2026-11-19T03:00:00Z',summary:{},items:[]});
+  // Chuông thông báo (arena) hỏi hộp thư ngay khi mount; hộp thư rỗng.
+  if(p === '/v1/notifications') return json(r,{items:[],unread_count:0});
   if(p === '/v1/criteria/generate/position' && method==='POST') { state.generateCalls+=1;
     if(state.generateCalls<=state.generateFail) return json(r,{detail:'AI trả về bộ tiêu chí không hợp lệ. Vui lòng thử lại.'},502);
     if(state.mode==='opaque') { state.versionsAfterGenerate=1;

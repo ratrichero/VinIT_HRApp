@@ -50,6 +50,9 @@ const queue = {
     if (p === '/v1/dashboard/work-queue') return json(r, queue);
     if (p === '/v1/scorecards/reminders') return json(r, []);
     if (p === '/v1/positions') return json(r, []);
+    // Chuông thông báo trong AppLayout hỏi hộp thư ngay khi mount; hộp thư rỗng.
+    // Thiếu route này thì fallback bên dưới trả 500 và test đỏ ở lỗi console.
+    if (p === '/v1/notifications') return json(r, { items: [], unread_count: 0 });
     return json(r, { detail: `Unexpected ${p}` }, 500);
   });
   const page = await c.newPage();

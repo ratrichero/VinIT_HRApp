@@ -9,6 +9,35 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — Vá mock của 5 test arena làm đỏ: 18 → 13 test đỏ
+
+**Vấn đề.** Mục trước đo được 5 test pass trước merge mà đỏ sau merge, tất cả vì mock **riêng của
+mỗi test** thiếu route mới của arena. Fixture chung `fixtures/hr-screens.cjs` đã được vá ở commit
+`df9a63c`, nhưng năm test này tự viết handler `context.route('**/v1/**')` nên không hưởng được.
+
+**Sửa.** Thêm vào mock riêng của từng test, trả dữ liệu rỗng, không đổi assert nào:
+
+| Test | Route thêm | Kiểu trả |
+| --- | --- | --- |
+| `account-ui` | `GET /v1/notifications` | `{items: [], unread_count: 0}` |
+| `position-open-partial-failure` | `GET /v1/notifications` | `{items: [], unread_count: 0}` |
+| `workflow-create-mock` | `GET /v1/notifications` | `{items: [], unread_count: 0}` |
+| `deadline-work-queue-mock` | `GET /v1/notifications` | `{items: [], unread_count: 0}` |
+| `ranking-context-mock` | `GET /v1/notifications` + `GET /v1/interviews` | `{items: [], unread_count: 0}` + `[]` |
+
+`deadline-work-queue-mock` là ca đáng chú ý: mock của nó trả **500** cho mọi path lạ (để bắt request
+chưa khai báo), nên thiếu route không hiện ra như "request lạ" mà như "máy chủ hỏng".
+
+**Đo.** Trước: cả 5 đỏ (`account-ui` — `Unmocked API request: GET /v1/notifications`;
+`position-open-partial-failure` — `Unexpected GET /v1/notifications`; `workflow-create-mock` — như trên;
+`deadline-work-queue-mock` — `500 Internal Server Error`; `ranking-context-mock` — thêm cả
+`GET /v1/interviews`). Sau: cả 5 pass, in đúng dòng "OK; all /v1 intercepted". Đối chứng: chính là
+lần chạy trước khi vá (đỏ ở 5 dòng assert trên) và lần chạy trên cây `8fc5f0b` (pass) — không phải
+suy luận.
+
+**Đã chạy.** 5 test trên. **Chưa kiểm.** Chưa chạy lại toàn bộ 45 file sau khi vá (chỉ 5 file bị
+sửa); 13 test đỏ còn lại (10 đã đỏ từ trước merge + 3 bị chặn cờ môi trường) giữ nguyên, chưa sửa.
+
 ## 2026-11-27 — Quét toàn bộ e2e: 18 test đỏ, trong đó 5 là nợ của arena
 
 **Việc làm.** Chạy tuần tự cả **45** file `frontend/tests/*.e2e.cjs` trên cây hiện tại (HEAD

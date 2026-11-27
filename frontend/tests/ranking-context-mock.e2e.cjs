@@ -52,6 +52,10 @@ const applications = ranking.map((item, index) => ({
     if (p === '/v1/dashboard/summary') return json(r, { open_positions: 2, total_applications: 0, applications_by_status: { SHORTLIST: 0 }, files_needing_hr_review: 0 });
     // Badge "việc cần làm" trên header gọi work-queue ở mọi trang đã đăng nhập.
     if (p === '/v1/dashboard/work-queue') return json(r, { generated_at: '2026-11-19T03:00:00Z', summary: {}, items: [] });
+    // Hai khối arena mới gọi ngay khi mở trang: chuông thông báo (hộp thư) và
+    // khối "Lịch phỏng vấn" trong hồ sơ (danh sách buổi). Cả hai rỗng.
+    if (p === '/v1/notifications') return json(r, { items: [], unread_count: 0 });
+    if (p === '/v1/interviews') return json(r, []);
     if (p === '/v1/positions/p1') return json(r, {
       position_id: 'p1', position_code: 'REQ-1', title: 'Backend', status: 'OPEN', department_id: 'd1',
       workflow: { next_action: { code: 'REVIEW_FILES', blocked_reason_code: null, target: { pathname: '/positions/p1/applicants', search: 'queue=FILE_REVIEW' } } },
