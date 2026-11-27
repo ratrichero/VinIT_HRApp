@@ -2035,5 +2035,18 @@
   "Máy chủ không kết nối được tới nhà cung cấp AI. Thử lại; nếu vẫn vậy thì báo Quản trị viên.": "The server could not reach the AI provider. Try again; if it keeps happening, tell an administrator.",
   "AI trả về nội dung không đọc được. Thử lại — lỗi này thường chỉ xảy ra một lần.": "The AI returned unreadable content. Try again — this usually happens only once.",
   "AI từ chối yêu cầu này. Kiểm tra lại nội dung JD rồi thử lại.": "The AI rejected this request. Check the job description and try again.",
-  "Không gọi được AI. Thử lại; nếu vẫn vậy thì báo Quản trị viên kèm thời điểm bạn thử.": "Could not reach the AI. Try again; if it keeps happening, tell an administrator with the time you tried."
+  "Không gọi được AI. Thử lại; nếu vẫn vậy thì báo Quản trị viên kèm thời điểm bạn thử.": "Could not reach the AI. Try again; if it keeps happening, tell an administrator with the time you tried.",
+  "Tổng hai nhóm: 100%": "Both groups total 100%",
+  "Tổng hai nhóm phải bằng 100%": "The two groups must total 100%",
+  "Trọng số nhóm là tỉ lệ điểm giữa hai nhóm, không phải trọng số tiêu chí. Mỗi nhóm phải có tiêu chí cộng đúng 100% trước khi xuất bản.": "Group weight is the score split between the two groups, not a criterion weight. Each group's criteria must total exactly 100% before publishing.",
+  "Chưa có tiêu chí nào trong nhóm này.": "No criteria in this group yet.",
+  "Chỉ Trưởng nhóm HR hoặc Quản trị viên xuất bản được rubric. Bản nháp này cần người có vai trò đó xuất bản.": "Only an HR Lead or Administrator can publish a rubric. This draft needs someone with that role to publish it.",
+  "Trọng số (%)": "Weight (%)",
+  "tiêu chí": "criteria",
+  "Tổng trọng số:": "Total weight:",
+  "Từ khóa bằng chứng": "Evidence keywords",
+  "Phân tách bằng dấu phẩy": "Separate with commas",
+  "Requirement spec (JSON)": "Requirement spec (JSON)",
+  "Tiêu chí bắt buộc": "Mandatory criteria",
+  "Tiêu chí ưu tiên": "Preferred criteria"
 }

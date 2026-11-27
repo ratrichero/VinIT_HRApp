@@ -135,11 +135,16 @@ def capabilities(user: dict = Depends(get_current_user)):
     try:
         roles, assigned = _require_directory(db, user['user_id'])
         # ADMIN không phải vai trò tuyển dụng nhưng quản trị hệ thống, nên phải
-        # hoạch định được thư viện rubric — nếu không thì màn hình hiện "Chưa có
-        # rubric nào" mà không có nút nào tạo được, tính năng chết với ADMIN
-        # (tài khoản dựng hệ thống). `can_publish` vẫn chỉ HR_LEAD.
+        # dựng được thư viện rubric — nếu không thì màn hình hiện "Chưa có rubric
+        # nào" mà không có nút nào tạo được, tính năng chết với ADMIN (tài khoản
+        # dựng hệ thống).
+        #
+        # `can_publish` cũng gồm ADMIN, cùng lý do và cùng quy ước với phần còn
+        # lại của hệ thống: xét ADMIN ở mọi chốt phân quyền thì phải xét cả ở
+        # đây, nếu không lại tái diễn đúng lỗi vừa sửa — ADMIN tạo được bản nháp
+        # rồi không bao giờ xuất bản được nó, và người tạo ít ai là HR_LEAD.
         return {'can_create': bool(assigned or roles.intersection({'ADMIN', 'HR_RECRUITER', 'HR_LEAD'})),
-                'can_publish': 'HR_LEAD' in roles, 'user_id': user['user_id']}
+                'can_publish': bool(roles.intersection({'ADMIN', 'HR_LEAD'})), 'user_id': user['user_id']}
     finally:
         db.close()
 
@@ -228,7 +233,12 @@ def publish(version_id: UUID, request: PublishTemplate, user: dict = Depends(get
         db.execute(text('SELECT 1 FROM app_private.rubric_templates WHERE template_id=:id FOR UPDATE'), {'id': row['template_id']})
         row = db.execute(text('SELECT * FROM app_private.rubric_template_versions WHERE template_version_id=:id FOR UPDATE'), {'id': str(version_id)}).mappings().one()
         roles, _ = _require_directory(db, user['user_id'], lock=True)
-        if 'HR_LEAD' not in roles: raise HTTPException(403, 'Chỉ HR Lead được xuất bản rubric')
+        # ADMIN đứng cùng HR_LEAD: vá đúng lỗ hổng làm ADMIN tạo được bản nháp
+        # mà không xuất bản được chính nó. Điều kiện này phải khớp tuyệt đối
+        # với `can_publish` ở endpoint capabilities, nếu lệch thì giao diện
+        # hiện nút nhưng bấm vào lại 403.
+        if not roles.intersection({'ADMIN', 'HR_LEAD'}):
+            raise HTTPException(403, 'Chỉ HR Lead hoặc Quản trị viên được xuất bản rubric')
         if row['status'] != 'DRAFT' or row['revision'] != request.expected_revision: raise HTTPException(409, 'Bản nháp đã thay đổi hoặc không còn hiệu lực')
         groups = db.execute(text('''SELECT category,SUM(weight_in_group) AS total, MAX(weight_in_group) AS max_weight
             FROM app_private.rubric_template_items WHERE template_version_id=:id GROUP BY category'''), {'id': str(version_id)}).mappings().all()

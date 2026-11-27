@@ -330,3 +330,33 @@ def test_frontend_only_raises_the_flag_for_a_mismatched_family():
     comp = (BACKEND.parent / "frontend" / "src" / "components" / "positions" / "ApplyRubric.tsx").read_text()
     assert "chosen.job_family_id !== jobFamilyId" in comp
     assert "rubricApi.apply(positionId, selected, crossFamily)" in comp
+
+
+# ---------------------------------------------------------------------------
+# ADMIN xuất bản được rubric
+# ---------------------------------------------------------------------------
+
+def test_publish_permission_matches_capabilities():
+    """`can_publish` và chốt chặn ở endpoint publish phải khớp tuyệt đối.
+
+    Nếu lệch nhau: giao diện hiện nút "Xuất bản" rồi bấm vào nhận 403, hoặc
+    ngược lại giấu nút trong khi API vẫn cho làm — cả hai đều là lỗi đã từng
+    xảy ra ở chỗ khác trong dự án này.
+
+    Đây là chỗ dễ tái phát nhất: hai biểu thức nằm cách nhau gần 100 dòng, và
+    lần sửa trước chỉ sửa `can_create` nên `can_publish` bị bỏ quên.
+    """
+    caps = RUBRICS[RUBRICS.index("def capabilities"):RUBRICS.index("@router.get('/families')")]
+    pub = RUBRICS[RUBRICS.index("def publish"):RUBRICS.index("@router.post('/versions/{version_id}/clone'")]
+    assert "'can_publish': bool(roles.intersection({'ADMIN', 'HR_LEAD'}))" in caps
+    assert "if not roles.intersection({'ADMIN', 'HR_LEAD'}):" in pub
+    # Không được quay lại điều kiện chỉ HR_LEAD.
+    assert "'can_publish': 'HR_LEAD' in roles" not in caps
+    assert "if 'HR_LEAD' not in roles" not in pub
+
+
+def test_publish_still_requires_a_lead_or_admin():
+    """Nới cho ADMIN không có nghĩa là mở cho mọi vai trò."""
+    pub = RUBRICS[RUBRICS.index("def publish"):RUBRICS.index("@router.post('/versions/{version_id}/clone'")]
+    assert "403" in pub
+    assert "HR_RECRUITER" not in pub

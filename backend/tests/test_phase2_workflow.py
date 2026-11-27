@@ -369,15 +369,21 @@ def test_hr_can_save_proposed_rubric_as_draft(client, seed):
     assert client.post('/v1/rubric-library/versions/' + result['template_version_id'] + '/publish', headers=headers(seed['hr']), json={'expected_revision': 1}).status_code == 403
 
 
-def test_admin_can_build_rubric_library_but_not_publish(client, seed):
-    """ADMIN dựng được thư viện rubric nhưng vẫn không xuất bản.
+def test_admin_can_create_and_publish_a_rubric(client, seed):
+    """ADMIN dựng được VÀ xuất bản được rubric.
 
-    Lỗi gốc: `capabilities.can_create` và `_require_editor` chỉ tính
-    HR_RECRUITER/HR_LEAD. ADMIN vào thư viện thì thấy "Chưa có rubric nào" mà
-    không có nút nào tạo được — với tài khoản quản trị (người dựng hệ thống)
-    thư viện rỗng vĩnh viễn, tính năng chết. Mọi endpoint phân quyền khác
-    (positions, scorecards, dashboard, shortlist) đều đã tính ADMIN; riêng chỗ
-    này bỏ sót. Xuất bản vẫn là quyền riêng của HR_LEAD.
+    Hai lỗi nối tiếp nhau ở cùng một chỗ:
+
+    1. `can_create` và `_require_editor` chỉ tính HR_RECRUITER/HR_LEAD. ADMIN
+       vào thư viện thấy "Chưa có rubric nào" mà không có nút nào tạo được —
+       thư viện rỗng vĩnh viễn với tài khoản dựng hệ thống.
+    2. Sửa (1) xong vẫn còn `can_publish` và endpoint publish chỉ cho HR_LEAD.
+       ADMIN tạo được bản nháp rồi không bao giờ xuất bản được chính nó — mà
+       người tạo ít ai là HR_LEAD.
+
+    Mọi endpoint phân quyền khác (positions, scorecards, dashboard, shortlist,
+    interviews, jd_import) đều đã tính ADMIN. Đây là chỗ duy nhất bỏ sót cả hai
+    lần, và lần thứ hai chỉ lộ ra khi có người thật tạo rubric rồi thử xuất bản.
     """
     admin = uid()
     with engine.begin() as conn:
@@ -389,8 +395,10 @@ def test_admin_can_build_rubric_library_but_not_publish(client, seed):
     caps = client.get(base + '/capabilities', headers=headers(admin))
     assert caps.status_code == 200, caps.text
     assert caps.json()['can_create'] is True
-    # Xuất bản là quyền của HR_LEAD, không mở cho ADMIN.
-    assert caps.json()['can_publish'] is False
+    # ADMIN cũng xuất bản được. Trước đây chỉ HR_LEAD, nên ADMIN tạo được bản
+    # nháp rồi không bao giờ xuất bản được chính nó — mà người tạo ít ai là
+    # HR_LEAD. Đây đúng là lỗi đã báo: tạo được rubric nhưng không xuất bản.
+    assert caps.json()['can_publish'] is True
 
     families = client.get(base + '/families', headers=headers(admin)).json()
     item = {'name': 'Synthetic admin', 'description': 'Synthetic test only',
@@ -399,9 +407,11 @@ def test_admin_can_build_rubric_library_but_not_publish(client, seed):
         'job_family_id': families[0]['job_family_id'], 'title': 'Rubric do ADMIN dựng', 'items': [item]})
     assert created.status_code == 201, created.text
     version = created.json()['template_version_id']
-    # Sửa được bản nháp mình tạo (owner truyền vào), và không xuất bản được.
+    # Sửa được bản nháp mình tạo (owner truyền vào), rồi xuất bản được.
     updated = client.put(base + '/versions/' + version, headers=headers(admin),
                          json={'expected_revision': 1, 'items': [item]})
     assert updated.status_code == 200, updated.text
-    assert client.post(base + '/versions/' + version + '/publish', headers=headers(admin),
-                       json={'expected_revision': 2}).status_code == 403
+    published = client.post(base + '/versions/' + version + '/publish', headers=headers(admin),
+                            json={'expected_revision': 2})
+    assert published.status_code == 200, published.text
+    assert published.json()['status'] == 'PUBLISHED'

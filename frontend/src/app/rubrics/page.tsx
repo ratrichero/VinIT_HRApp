@@ -10,10 +10,13 @@ import { purgeRubricDrafts, readDraft, removeDraft, rubricDraftKey, writeDraft }
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { optionalRequirementSpec, rubricKeywords } from '@/lib/phase2Workflow';
 import backendProposal from '@/data/rubric-proposal-it-backend.json';
+import RubricItemEditor, { CategoryHeader, groupTotal, type RubricItem } from '@/components/positions/RubricItemEditor';
 
 type Family = { job_family_id: string; name: string; code: string };
 type Capabilities = { user_id: string; can_create: boolean; can_publish: boolean };
-type Item = { name: string; description: string; category: 'MUST_HAVE' | 'NICE_TO_HAVE'; weight_in_group: number | string; expected_evidence_keywords: string[]; requirement_spec: Record<string, unknown> | null; evidence_guidance: string | null };
+// Một nguồn duy nhất cho hình dạng tiêu chí: component tự viết nó.
+// Hai bản định nghĩa song song là cách chắc chắn nhất để chúng lệch nhau.
+type Item = RubricItem;
 type Version = { template_version_id: string; title: string; family_name?: string; job_family_id: string; level_band: string | null; created_by: string; status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'; version_number: number; revision: number; mandatory_weight_total: number | string; nice_to_have_weight_total: number | string; items: Item[] };
 const familyLabel = (code: string, name: string, t: (key: string) => string) => code === 'ADMIN_OPERATIONS' ? t('Vận hành & Hành chính') : name;
 const statusLabel = (status: Version['status'], t: (key: string) => string) => ({ DRAFT: t('Bản nháp'), PUBLISHED: t('Đã xuất bản'), ARCHIVED: t('Đã lưu trữ') }[status]);
@@ -323,25 +326,152 @@ export default function RubricsPage() {
         {versions.length === 0 && <Typography sx={{ mt: 2 }}>{t('Chưa có rubric nào.')}</Typography>}
         {versions.map(v => <Button key={v.template_version_id} fullWidth sx={{ mt: 1, justifyContent: 'flex-start', textAlign: 'left' }} variant={selected?.template_version_id === v.template_version_id ? 'outlined' : 'text'} disabled={busy} onClick={() => select(v.template_version_id)}>{v.title} · v{v.version_number} · {statusLabel(v.status, t)} · {families.find(f => f.job_family_id === v.job_family_id) ? familyLabel(families.find(f => f.job_family_id === v.job_family_id)!.code, v.family_name || '', t) : v.family_name}</Button>)}
       </CardContent></Card>
-      {(creating || selected) && <Card variant="outlined" sx={{ flex: 1, width: '100%' }}><CardContent><Stack spacing={2}>
-        {creating ? <><TextField select label={t('Nhóm vị trí')} value={family} onChange={e => { setFamily(e.target.value); setDirty(true); }}>{families.map(f => <MenuItem value={f.job_family_id} key={f.job_family_id}>{familyLabel(f.code, f.name, t)}</MenuItem>)}</TextField><TextField required label={t('Tên rubric')} value={title} onChange={e => { setTitle(e.target.value); setDirty(true); }} /><TextField label={t('Cấp độ (tùy chọn)')} value={level} onChange={e => { setLevel(e.target.value); setDirty(true); }} /></> : <Typography variant="h2" sx={{ fontSize: 20 }}>{selected?.title} · v{selected?.version_number} · {selected && statusLabel(selected.status, t)} {selected?.level_band && `· ${selected.level_band}`}</Typography>}
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}><TextField type="number" label={t('Trọng số bắt buộc (%)')} value={mandatory} disabled={!canEdit} onChange={e => { setMandatory(e.target.value); setDirty(true); }} /><TextField type="number" label={t('Trọng số ưu tiên (%)')} value={nice} disabled={!canEdit} onChange={e => { setNice(e.target.value); setDirty(true); }} /></Stack>
-        <Typography variant="body2">{t('Tổng hai nhóm bằng 100; mỗi nhóm có tiêu chí phải cộng 100 khi xuất bản.')}</Typography>
-        {items.map((item, i) => <Box key={i}><Divider sx={{ mb: 2 }} /><Stack spacing={1.5}>
-          <TextField label={t('Tên tiêu chí')} value={item.name} disabled={!canEdit} onChange={e => changeItem(i, { name: e.target.value })} />
-          <TextField label={t('Mô tả tiêu chí')} multiline value={item.description} disabled={!canEdit} onChange={e => changeItem(i, { description: e.target.value })} />
-          <TextField select label={t('Nhóm tiêu chí')} value={item.category} disabled={!canEdit} onChange={e => changeItem(i, { category: e.target.value as Item['category'] })}><MenuItem value="MUST_HAVE">{t('Bắt buộc')}</MenuItem><MenuItem value="NICE_TO_HAVE">{t('Ưu tiên')}</MenuItem></TextField>
-          <TextField type="number" label={t('Trọng số trong nhóm (%)')} value={item.weight_in_group} disabled={!canEdit} onChange={e => changeItem(i, { weight_in_group: e.target.value })} />
-          <TextField label={t('Từ khóa bằng chứng (phân tách bằng dấu phẩy)')} value={keywords[i] || ''} disabled={!canEdit} onChange={e => { setKeywords(current => current.map((value, n) => n === i ? e.target.value : value)); setDirty(true); }} />
-          <TextField label={t('Hướng dẫn bằng chứng')} value={item.evidence_guidance || ''} disabled={!canEdit} multiline onChange={e => changeItem(i, { evidence_guidance: e.target.value || null })} />
-          <TextField label={t('Requirement spec (JSON tùy chọn)')} value={specs[i] || ''} disabled={!canEdit} multiline onChange={e => { setSpecs(current => current.map((value, n) => n === i ? e.target.value : value)); setDirty(true); }} />
-          {canEdit && <Button color="error" onClick={() => { setItems(current => current.filter((_, n) => n !== i)); setSpecs(current => current.filter((_, n) => n !== i)); setKeywords(current => current.filter((_, n) => n !== i)); setDirty(true); }}>{t('Xóa tiêu chí')}</Button>}
-        </Stack></Box>)}
-        {canEdit && <><Button onClick={() => { setItems(current => [...current, emptyItem()]); setSpecs(current => [...current, '']); setKeywords(current => [...current, '']); setDirty(true); }}>{t('Thêm tiêu chí')}</Button><Button variant="contained" disabled={busy || (creating && (!family || !title.trim()))} onClick={save}>{t('Lưu bản nháp')}</Button></>}
-        {!creating && selected?.status === 'DRAFT' && capabilities.can_publish && <Button variant="outlined" disabled={busy || dirty} onClick={() => act('publish')}>{t('Xuất bản rubric')}</Button>}
-        {!creating && selected?.status === 'PUBLISHED' && capabilities.can_create && <Button variant="outlined" disabled={busy} onClick={() => act('clone')}>{t('Tạo phiên bản nháp mới')}</Button>}
-        {dirty && <Typography variant="caption">{t('Có thay đổi chưa lưu.')}</Typography>}
-      </Stack></CardContent></Card>}
+      {(creating || selected) && (
+        <Card variant="outlined" sx={{ flex: 1, width: '100%' }}>
+          <CardContent>
+            <Stack spacing={2}>
+              {creating ? (
+                <>
+                  <TextField select label={t('Nhóm vị trí')} value={family} onChange={e => { setFamily(e.target.value); setDirty(true); }}>
+                    {families.map(f => <MenuItem value={f.job_family_id} key={f.job_family_id}>{familyLabel(f.code, f.name, t)}</MenuItem>)}
+                  </TextField>
+                  <TextField required label={t('Tên rubric')} value={title} onChange={e => { setTitle(e.target.value); setDirty(true); }} />
+                  <TextField label={t('Cấp độ (tùy chọn)')} value={level} onChange={e => { setLevel(e.target.value); setDirty(true); }} />
+                </>
+              ) : (
+                <Typography variant="h2" sx={{ fontSize: 20 }}>
+                  {selected?.title} · v{selected?.version_number} · {selected && statusLabel(selected.status, t)} {selected?.level_band && `· ${selected.level_band}`}
+                </Typography>
+              )}
+
+              {/* Trọng số nhóm + tổng điểm của cả rubric. Hai nhóm phải cộng 100. */}
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextField
+                  type="number" size="small" label={t('Trọng số bắt buộc (%)')}
+                  value={mandatory} disabled={!canEdit}
+                  onChange={e => { setMandatory(e.target.value); setDirty(true); }}
+                  sx={{ width: 190 }}
+                  helperText={Number(mandatory) + Number(nice) === 100 ? t('Tổng hai nhóm: 100%') : t('Tổng hai nhóm phải bằng 100%')}
+                  error={Number(mandatory) + Number(nice) !== 100}
+                />
+                <TextField
+                  type="number" size="small" label={t('Trọng số ưu tiên (%)')}
+                  value={nice} disabled={!canEdit}
+                  onChange={e => { setNice(e.target.value); setDirty(true); }}
+                  sx={{ width: 190 }}
+                />
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                {t('Trọng số nhóm là tỉ lệ điểm giữa hai nhóm, không phải trọng số tiêu chí. Mỗi nhóm phải có tiêu chí cộng đúng 100% trước khi xuất bản.')}
+              </Typography>
+
+              {/* HAI CỘT: bắt buộc bên trái, ưu tiên bên phải — cùng cách bố trí với
+                  trang chi tiết vị trí tab Tiêu chí, để HR không phải học hai
+                  giao diện cho cùng một khái niệm. Trên màn hẹp hai cột xếp dọc. */}
+              <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
+                {(['MUST_HAVE', 'NICE_TO_HAVE'] as const).map(category => {
+                  const indexes = items.map((item, i) => ({ item, i })).filter(({ item }) => item.category === category);
+                  return (
+                    <Card key={category} variant="outlined" sx={{ borderColor: '#E4EAF2', backgroundColor: '#FCFDFE' }}>
+                      <CardContent>
+                        <CategoryHeader category={category} items={items} />
+                        {indexes.length === 0 && (
+                          <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+                            {t('Chưa có tiêu chí nào trong nhóm này.')}
+                          </Typography>
+                        )}
+                        {indexes.map(({ item, i }, positionInColumn) => (
+                          <Box key={i}>
+                            {positionInColumn > 0 && <Divider />}
+                            <RubricItemEditor
+                              item={item}
+                              index={i}
+                              keywords={keywords[i] || ''}
+                              spec={specs[i] || ''}
+                              canEdit={canEdit}
+                              onChange={patch => changeItem(i, patch)}
+                              onKeywordsChange={value => { setKeywords(current => current.map((v, n) => n === i ? value : v)); setDirty(true); }}
+                              onSpecChange={value => { setSpecs(current => current.map((v, n) => n === i ? value : v)); setDirty(true); }}
+                              onRemove={() => {
+                                setItems(current => current.filter((_, n) => n !== i));
+                                setSpecs(current => current.filter((_, n) => n !== i));
+                                setKeywords(current => current.filter((_, n) => n !== i));
+                                setDirty(true);
+                              }}
+                              onMove={direction => {
+                                // Đổi chỗ với tiêu chí cùng nhóm liền kề, không phải với
+                                // phần tử kế tiếp trong mảng: hai nhóm nằm ở hai cột nên
+                                // "lên/xuống" phải hiểu theo cột người dùng đang nhìn.
+                                const siblings = indexes.map(entry => entry.i);
+                                const at = siblings.indexOf(i);
+                                const target = siblings[at + direction];
+                                if (target === undefined) return;
+                                setItems(current => {
+                                  const next = [...current];
+                                  [next[i], next[target]] = [next[target], next[i]];
+                                  return next;
+                                });
+                                setSpecs(current => {
+                                  const next = [...current];
+                                  [next[i], next[target]] = [next[target], next[i]];
+                                  return next;
+                                });
+                                setKeywords(current => {
+                                  const next = [...current];
+                                  [next[i], next[target]] = [next[target], next[i]];
+                                  return next;
+                                });
+                                setDirty(true);
+                              }}
+                            />
+                          </Box>
+                        ))}
+                        <Divider sx={{ my: 1.5 }} />
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+                          <Typography
+                            variant="body2"
+                            color={indexes.length === 0 || Math.abs(groupTotal(items, category) - 100) < 0.005 ? 'text.secondary' : 'error'}
+                            fontWeight={groupTotal(items, category) === 100 ? 400 : 600}
+                          >
+                            {t('Tổng trong nhóm:')} {groupTotal(items, category)}% / 100%
+                          </Typography>
+                          {canEdit && (
+                            <Button
+                              size="small"
+                              onClick={() => {
+                                // Thêm vào ĐÚNG cột: nhóm của tiêu chí mới phải khớp cột
+                                // người dùng vừa bấm, không để họ thêm rồi phải đổi nhóm tay.
+                                setItems(current => [...current, { ...emptyItem(), category }]);
+                                setSpecs(current => [...current, '']);
+                                setKeywords(current => [...current, '']);
+                                setDirty(true);
+                              }}
+                            >
+                              {t('Thêm tiêu chí')}
+                            </Button>
+                          )}
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </Box>
+
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+                {canEdit && <Button variant="contained" disabled={busy || (creating && (!family || !title.trim()))} onClick={save}>{t('Lưu bản nháp')}</Button>}
+                {!creating && selected?.status === 'DRAFT' && capabilities.can_publish && <Button variant="outlined" disabled={busy || dirty} onClick={() => act('publish')}>{t('Xuất bản rubric')}</Button>}
+                {!creating && selected?.status === 'PUBLISHED' && capabilities.can_create && <Button variant="outlined" disabled={busy} onClick={() => act('clone')}>{t('Tạo phiên bản nháp mới')}</Button>}
+                {dirty && <Typography variant="caption">{t('Có thay đổi chưa lưu.')}</Typography>}
+              </Box>
+              {!creating && selected?.status === 'DRAFT' && !capabilities.can_publish && (
+                <Alert severity="info">
+                  {t('Chỉ Trưởng nhóm HR hoặc Quản trị viên xuất bản được rubric. Bản nháp này cần người có vai trò đó xuất bản.')}
+                </Alert>
+              )}
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
     </Stack>}
 
     <Dialog open={suggestOpen} onClose={() => !suggesting && setSuggestOpen(false)} fullWidth maxWidth="sm">
