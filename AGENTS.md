@@ -32,6 +32,11 @@ export TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55433/hra_agentx_test'
 pytest backend/tests -q     # kỳ vọng: 671 passed, 0 skipped
 ```
 
+Chưa có PostgreSQL nào chạy trên máy? `bash scripts/local-pg.sh --port 55433 --name hra_agentx_test`
+dựng luôn binary (bundle `pgserver`, không cần root), data dir, hai shim extension rồi gọi
+script trên; `--stop` để tắt. Đầu file đó ghi khác biệt **PG 16.2 ở máy vs PG 17 ở CI**
+(pgvector 0.6.2 vs 0.8.x) — nguyên nhân của những lần "xanh trên máy, đỏ trên CI".
+
 Script này là **nguồn duy nhất** — CI cũng chạy đúng nó, nên máy và CI không
 lệch nhau. Nó tự lo phần dễ sai: tạo role stub, `schema auth`, và **bỏ qua
 `00035`** (xem mục 1.2). Đừng chép tay danh sách migration từ

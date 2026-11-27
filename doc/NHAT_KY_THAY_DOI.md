@@ -9,6 +9,65 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — `scripts/local-pg.sh`: dựng PostgreSQL cục bộ bằng một lệnh
+
+**Vấn đề.** Bước dựng PostgreSQL để chạy integration test chỉ nằm trong đầu người
+vừa làm: cài `pgserver`, tìm bundle `pginstall`, tự viết hai file extension shim,
+`initdb`, `pg_ctl` với cổng riêng, rồi mới gọi `scripts/test-db.sh`. `/tmp` không
+sống qua archive, nên phiên sau mất trắng và phải mò lại — mò sai một bước thì
+triệu chứng rất khó đọc (Chromium báo thiếu font, test báo "Target page closed",
+psql báo thiếu extension…).
+
+**Script làm gì.** `bash scripts/local-pg.sh [--port 55433] [--name hra_agent_test]`
+— bốn bước, mỗi bước kiểm trước khi làm:
+
+1. Venv + `pgserver`: bundle PostgreSQL tự chứa, không cần root, không đụng
+   PostgreSQL hệ thống (`/tmp/venv` mặc định).
+2. Hai **shim extension** thuần SQL, kèm chú thích vì sao chúng trung thực:
+   - `uuid-ossp`: `uuid_generate_v4()` → `gen_random_uuid()` của core (cùng là
+     UUID v4 ngẫu nhiên; bundle không có libuuid).
+   - `pgcrypto`: `digest(data, algo)` trên `sha256/sha384/sha512/sha224/md5` của
+     core. PG 16 buộc pgcrypto phải có OpenSSL, mà máy chỉ có header OpenSSL 3.5
+     (của Node) lệch ABI với libcrypto 3.0.13 — không dựng được bản thật. Cùng
+     thuật toán, cùng byte đầu ra, nhưng **không** có `crypt()`/`pgp_sym_encrypt()`;
+     nếu migration sau này cần chúng thì shim không đủ.
+3. `initdb` + `pg_ctl` trên cổng riêng theo agent, socket riêng, log riêng; chờ
+   `pg_isready` thay vì `sleep` mù.
+4. Giao phần schema cho `scripts/test-db.sh` — vẫn là nguồn duy nhất của role
+   stub, `schema auth` và danh sách migration (không chép sang đây).
+
+`--stop` tắt server, giữ dữ liệu. Chạy lại khi server đang chạy thì chỉ tạo DB mới,
+không khởi động lại và không ghi lại shim.
+
+**Khác biệt với CI (PG 17 + `pgvector/pgvector:pg17`).** Ghi ở đầu script:
+
+| | Máy (script này) | CI |
+| --- | --- | --- |
+| PostgreSQL | **16.2** (bundle `pgserver`, wheel tự chứa) | **17** (service container) |
+| pgvector | **0.6.2** (dựng sẵn trong bundle) | **0.8.x** |
+| contrib (`uuid-ossp`, `pgcrypto`) | không có → shim SQL | có thật |
+| socket / auth | tự đặt `-k /tmp/pgsock`, `auth=trust`, chỉ `127.0.0.1` | service mặc định |
+| locale | `C` (initdb) | mặc định image |
+
+Hệ quả thực tế: test nào dựa vào cú pháp/opclass mới của pgvector ≥ 0.7 có thể
+xanh trên CI mà đỏ ở máy (hoặc ngược lại); test nào dựa vào `crypt()` sẽ đỏ ở máy
+vì shim không có. Khi nghi ngờ thì CI là chuẩn.
+
+**Đã đo, từ `/tmp` trắng** (venv mới `/tmp/pgscript-venv`, data mới
+`/tmp/pgscript-data`, cổng 55441):
+
+- dựng xong DB trong một lần chạy (pip tải bundle, initdb 16.2, 2 shim, migration);
+- `pytest backend/tests -q` trên DB đó: **918 passed, 0 skipped** (118,76s);
+- chạy lại khi server đang chạy → tạo DB thứ hai, không khởi động lại;
+- `--stop` → `server stopped`; chạy lại → tự `pg_ctl start` và tạo DB thứ ba.
+
+**Chưa kiểm.** Chưa chạy trên macOS/Windows (script dùng `bash`, `awk`, `seq`).
+Lần đầu cần mạng để `pip install pgserver`; máy không có mạng thì phải chép bundle
+sẵn. `pgserver` bản mới có thể đổi bundle/đường dẫn — script thoát với thông báo
+rõ nếu không thấy `pg_ctl`. Nhánh lỗi "server đang chạy ở cổng khác" mới chỉ được
+viết, chưa dựng lại để thử. `AGENTS.md` §1.1 vẫn ghi "671 passed" (số cũ, thực tế
+918) — sửa ở lần đụng file đó, không gộp vào đây.
+
 ## 2026-11-27 — 45 bài e2e: 15 bài không ai chạy, và một job CI chỉ chạy nhóm đang xanh
 
 **Vấn đề đo được.** `frontend/tests` có **45 file `*.e2e.cjs`**. Đọc `package.json`
