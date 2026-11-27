@@ -1466,7 +1466,7 @@ export default function ApplicantsRankingPage() {
                     </Box>
                   </TableCell>
                   <TableCell align="center">
-                    <Tooltip title={item.is_shortlisted ? t("Bỏ shortlist") : item.application_status === 'IN_REVIEW' ? t("Thêm vào Shortlist") : t("Chuyển hồ sơ sang Đang xem trước khi shortlist")}>
+                    <Tooltip title={item.is_shortlisted ? t("Bỏ shortlist") : item.application_status === 'IN_REVIEW' ? t("Thêm vào shortlist") : t("Chuyển hồ sơ sang Đang xem trước khi shortlist")}>
                       <span><IconButton
                         color={item.is_shortlisted ? "secondary" : "default"}
                         onClick={(e) => {

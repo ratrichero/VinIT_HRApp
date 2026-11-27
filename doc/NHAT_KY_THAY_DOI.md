@@ -9,6 +9,56 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — Từ điển i18n: 78 khoá trả về tiếng Việt, 30 giá trị trùng, và hai test chặn
+
+**Vấn đề.** `test:i18n` chỉ kiểm *có entry*, không kiểm entry nói gì, nên hai lỗi
+im lặng cùng tồn tại:
+
+1. **78 khoá** có giá trị y nguyên khoá tiếng Việt → giao diện tiếng Anh vẫn hiện
+tiếng Việt. Con số thật lớn hơn con số đã báo trước đó (69): regex dùng bộ ký tự
+thiếu (thiếu `ộ`, `ẽ`, `ậ`…) nên bỏ sót 9 khoá; test mới dùng bộ ký tự đầy đủ của
+bộ test hiện có và lộ ra.
+2. **30 nhóm giá trị tiếng Anh trùng** giữa các khoá → `translate` dựng bảng nghịch
+Anh → Việt nên hai khoá cùng một bản dịch làm dịch ngược chọn sai khoá.
+
+**Hai test mới** (`tests/i18n.test.cjs`, tổng 6 test):
+
+| Test | Bắt gì |
+| --- | --- |
+| `không có khoá nào trả về y nguyên tiếng Việt…` | value === key và khoá có dấu tiếng Việt |
+| `giá trị tiếng Anh là duy nhất…` | hai khoá cùng một bản dịch |
+| `dịch ngược trả lại đúng khoá…` | chốt chặn: dịch vòng tròn 40 mẫu phải về đúng khoá gốc |
+
+Hai danh sách miễn trừ có sẵn nhưng **để trống**: mỗi dòng thêm vào là một chỗ
+người dùng tiếng Anh vẫn đọc tiếng Việt, hoặc một chỗ dịch ngược nhập nhằng —
+phải kèm lý do cụ thể (tên riêng/mã).
+
+**Sửa.** 2090 → **2081 entry**:
+
+- **78 dòng dịch thật** (không phải `"X": "X"`), gồm cả các câu dài về rubric mẫu,
+tiêu chí AI, nhóm vị trí, loại việc làm, cảnh báo tệp chưa quét virus.
+- **30 nhóm trùng** được tách bằng bản dịch khác nghĩa: `Đang chờ`/`Chờ xử lý` →
+`Pending`/`Queued`, `Điểm`/`Chấm điểm` → `Score`/`Grading`, `Sửa`/`Chỉnh sửa` →
+`Edit`/`Modify`, `Vị trí tuyển dụng`/`Danh sách vị trí tuyển dụng` → `Recruitment
+positions`/`Recruitment positions list`, …
+- **9 khoá bị bỏ**: 2 khoá rác có khoảng trắng đầu (`"                      Đã xử
+lý"`), 2 khoá chết (`Từ khóa bằng chứng`, `Shortlist chia sẻ`), và 5 khoá gộp về
+một lối viết trong mã: `Huỷ`→`Hủy`, `Xoá tiêu chí`→`Xóa tiêu chí`, `Thêm vào
+Shortlist`→`Thêm vào shortlist`, `Xem chi tiết & phản hồi`→`Xem chi tiết và phản
+hồi`, `Giờ`→`Thời gian`. Gộp chứ không dịch khác nhau: cùng một từ mà hai lối
+viết thì bản dịch phải giống nhau, nếu không bảng nghịch không thể vừa ý cả hai.
+
+**Kiểm ngược.** Chèn thử một khoá chưa dịch và một khoá trùng giá trị → đúng **2
+test đỏ** (hai test mới), 4 test còn xanh; phục hồi thì xanh lại.
+
+**Đã chạy.** `test:i18n` **6 pass**; `test:unit` **234 pass**; `tsc` exit 0;
+`next build` exit 0. Đo trực tiếp trên từ điển: `leak 0, dup 0, 2081 entry`.
+
+**Chưa kiểm.** Chưa mở giao diện tiếng Anh để đọc bằng mắt. Bản dịch do mình
+viết; vài chỗ phải chọn từ khác nghĩa để phá trùng (`Chấm điểm`→`Grading`,
+`Chỉnh sửa`→`Modify`, `Mở`/`Đang mở`→`Open`/`Currently open`) — đúng nghĩa gần
+nhất nhưng **nên có người duyệt nội dung** trước khi coi là bản dịch cuối.
+
 ## 2026-11-27 — Chuỗi lỗi "bằng cấp": cờ `threshold_pending` phải tắt được, và script đếm dữ liệu cũ
 
 **Trạng thái khi bắt đầu.** Arena đã sửa hai phần trong `eb48521`: bỏ

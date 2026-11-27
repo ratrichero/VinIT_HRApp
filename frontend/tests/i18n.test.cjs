@@ -100,3 +100,76 @@ test('all literal UI translation keys have an English entry', () => {
   assert.ok(scanned > 0, 'the scan must actually read source files');
   assert.deepEqual(missing, []);
 });
+
+// ---------------------------------------------------------------------------
+// Hai lỗi im lặng của từ điển. Cả hai đều "xanh" với test cũ vì test cũ chỉ
+// kiểm **có entry**, không kiểm entry đó nói gì.
+// ---------------------------------------------------------------------------
+
+/**
+ * Khoá được phép giữ nguyên tiếng Việt làm bản dịch. Chỉ dành cho **tên riêng
+ * và mã** — thứ không có bản dịch tiếng Anh trung thực. Không thêm câu giao
+ * diện vào đây: mỗi dòng thêm vào là một chỗ người dùng tiếng Anh vẫn đọc tiếng
+ * Việt. Giá trị là lý do, để người sau không phải đoán.
+ */
+const UNTRANSLATED_EXEMPT = {
+  // Ví dụ khi cần: 'VinUni': 'tên trường, giữ nguyên ở mọi ngôn ngữ',
+};
+
+/**
+ * Giá trị tiếng Anh được phép trùng giữa nhiều khoá. `translate` dựng bảng
+ * nghịch (Anh → Việt); trùng giá trị nghĩa là dịch ngược ra một khoá khác với
+ * khoá đã sinh ra nó. Cách đúng để hết trùng là **gộp hai khoá tiếng Việt**
+ * (nếu cùng nghĩa) hoặc chọn bản dịch khác nhau (nếu khác nghĩa) — không phải
+ * thêm vào danh sách này.
+ */
+const DUPLICATE_VALUE_EXEMPT = {
+  // 'Ví dụ': 'lý do cụ thể vì sao hai khoá buộc phải cùng một câu tiếng Anh',
+};
+
+test('không có khoá nào trả về y nguyên tiếng Việt khi giao diện là tiếng Anh', () => {
+  const dictionary = require('../src/i18n/en.json');
+  const untranslated = Object.entries(dictionary)
+    .filter(([key, value]) => value === key && VIETNAMESE.test(key))
+    .map(([key]) => key)
+    .filter(key => !(key in UNTRANSLATED_EXEMPT));
+  assert.deepEqual(
+    untranslated,
+    [],
+    'Những khoá này có giá trị y nguyên khoá tiếng Việt, nên giao diện tiếng Anh hiện tiếng Việt: '
+      + `${JSON.stringify(untranslated)}. Dịch thật, hoặc thêm vào UNTRANSLATED_EXEMPT kèm lý do `
+      + '(chỉ tên riêng/mã).',
+  );
+});
+
+test('giá trị tiếng Anh là duy nhất để dịch ngược không nhập nhằng', () => {
+  const dictionary = require('../src/i18n/en.json');
+  const byValue = new Map();
+  for (const [key, value] of Object.entries(dictionary)) {
+    if (value in DUPLICATE_VALUE_EXEMPT) continue;
+    if (!byValue.has(value)) byValue.set(value, []);
+    byValue.get(value).push(key);
+  }
+  const collisions = [...byValue.entries()]
+    .filter(([, keys]) => keys.length > 1)
+    .map(([value, keys]) => ({ value, keys }));
+  assert.deepEqual(
+    collisions,
+    [],
+    'Hai khoá khác nhau cùng một bản dịch làm bảng nghịch Anh → Việt chọn sai khoá: '
+      + `${JSON.stringify(collisions)}. Gộp hai khoá nếu cùng nghĩa, hoặc chọn bản dịch khác nếu khác nghĩa.`,
+  );
+});
+
+test('dịch ngược trả lại đúng khoá tiếng Việt đã sinh ra nó', () => {
+  // Chốt chặn cho chính test trên: nếu bảng nghịch hỏng vì lý do khác (khoá bị
+  // ghi đè, dấu câu lệch), phép dịch vòng tròn sẽ lộ ra.
+  const dictionary = require('../src/i18n/en.json');
+  const sample = Object.entries(dictionary)
+    .filter(([key, value]) => VIETNAMESE.test(key) && !key.includes('{0}') && key.length < 60)
+    .slice(0, 40);
+  assert.ok(sample.length > 0, 'phải có mẫu để kiểm');
+  for (const [key, value] of sample) {
+    assert.equal(translate(value, 'vi'), key, `dịch ngược "${value}" ra khoá khác "${key}"`);
+  }
+});

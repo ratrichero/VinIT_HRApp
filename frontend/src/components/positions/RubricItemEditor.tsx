@@ -339,7 +339,7 @@ export default function RubricItemEditor({
           <Box sx={{ pl: '28px', display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
             <Button size="small" onClick={() => onMove(-1)} disabled={index === 0}>{t('Lên')}</Button>
             <Button size="small" onClick={() => onMove(1)}>{t('Xuống')}</Button>
-            <Button size="small" color="error" onClick={onRemove}>{t('Xoá tiêu chí')}</Button>
+            <Button size="small" color="error" onClick={onRemove}>{t('Xóa tiêu chí')}</Button>
             <Button size="small" onClick={() => void resync()} disabled={resyncing || !item.name.trim()}>
               {resyncing ? t('Đang suy lại…') : t('Suy lại từ tên + mô tả')}
             </Button>

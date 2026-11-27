@@ -227,7 +227,7 @@ export default function ShortlistPage() {
                     </Typography>
                   </TableCell>
                   <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                    <Tooltip title={t("Xem chi tiết & phản hồi")}>
+                    <Tooltip title={t("Xem chi tiết và phản hồi")}>
                       <IconButton
                         sx={{ color: '#0A2B57' }}
                         aria-label={t("Xem chi tiết và phản hồi")}

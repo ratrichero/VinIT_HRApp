@@ -104,7 +104,7 @@ export default function MyInterviewsPage() {
       <Table size="small">
         <TableHead><TableRow>
           <TableCell sx={{ width: 130 }}>{t('Ngày')}</TableCell>
-          <TableCell>{t('Giờ')}</TableCell>
+          <TableCell>{t('Thời gian')}</TableCell>
           <TableCell>{t('Vị trí')}</TableCell>
           <TableCell>{t('Ứng viên')}</TableCell>
           <TableCell>{t('Vòng')}</TableCell>

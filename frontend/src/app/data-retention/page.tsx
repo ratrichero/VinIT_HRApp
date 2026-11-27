@@ -273,7 +273,7 @@ export default function DataRetentionPage() {
                             </Button>
                             <Button size="small" disabled={!canCancelRetentionCase(item)}
                               onClick={() => setPendingAction({ kind: 'cancel', item })} data-testid={`retention-cancel-${item.retention_case_id}`}>
-                              {t('Huỷ')}
+                              {t('Hủy')}
                             </Button>
                           </Stack>
                         </TableCell>
