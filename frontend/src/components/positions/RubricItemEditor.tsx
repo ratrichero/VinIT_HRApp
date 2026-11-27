@@ -9,7 +9,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/i18n/I18nProvider';
 import { rubricApi } from '@/lib/api';
 import {
-  buildSpec as buildSpecShared, KIND_LABEL, specKindOf, SPEC_KINDS, type SpecKind,
+  KIND_LABEL, specKindOf, SPEC_KINDS, withKind, type SpecKind,
 } from '@/lib/requirementSpec';
 
 export type RubricItem = {
@@ -19,6 +19,12 @@ export type RubricItem = {
   weight_in_group: number | string;
   expected_evidence_keywords: string[];
   requirement_spec: Record<string, unknown> | null;
+  /**
+   * Máy chủ đã điền tạm một ngưỡng để response serialize được, nhưng chưa ai
+   * quyết ngưỡng thật. Khác `requirement_spec == null`: null nghĩa là "chưa
+   * từng có spec", cờ này nghĩa là "có spec, thiếu đúng con số".
+   */
+  threshold_pending?: boolean;
   evidence_guidance: string | null;
 };
 
@@ -124,16 +130,10 @@ export default function RubricItemEditor({
    * vi đúng: tiêu chí "số năm" mà không nêu số năm thì chưa phải tiêu chí.
    */
   const changeKind = async (next: SpecKind) => {
-    const base: Record<string, unknown> = { ...(spec || {}), kind: next };
-    if (next !== 'YEARS') base.min_years = null;
-    if (next !== 'DEGREE') base.required_degree_level = null;
-    if (next !== 'LANGUAGE') {
-      base.required_languages = [];
-      base.required_ielts = null;
-      base.required_toeic = null;
-      base.required_cefr = null;
-      base.required_language_rank = null;
-    }
+    // Dùng `withKind` dùng chung thay vì chép lại các câu `if (next !== 'YEARS')
+    // …`. Chép tay chính là cách lỗi 422 lần trước sinh ra: trang rubric và
+    // trang vị trí lệch nhau vì mỗi nơi tự viết một bản.
+    const base = withKind(spec, next);
     onChange({ requirement_spec: base });
     // Loại mới cần ngưỡng mà chưa có: mượn luôn đường suy luận của nút
     // "Suy lại", chỉ để điền sẵn — không ghi đè thứ HR đã nhập.
@@ -141,7 +141,10 @@ export default function RubricItemEditor({
       (next === 'YEARS' && base.min_years == null)
       || (next === 'DEGREE' && base.required_degree_level == null)
       || (next === 'LANGUAGE' && !(base.required_languages as string[] | undefined)?.length
-          && base.required_ielts == null)
+          && base.required_ielts == null
+          && base.required_toeic == null
+          && base.required_cefr == null
+          && base.required_language_rank == null)
     );
     if (needsThreshold) await resync(next);
   };
@@ -218,6 +221,13 @@ export default function RubricItemEditor({
       </Box>
 
       {/* ─── Dòng 4: ngưỡng — chỉ hiện khi loại cần, và chỉ hiện thứ liên quan ─ */}
+      {canEdit && item.threshold_pending && (
+        <Box sx={{ pl: '28px', mb: 1.25 }}>
+          <Alert severity="warning" sx={{ py: 0.25 }}>
+            {t('Tiêu chí này chưa có ngưỡng. Chọn bậc bằng/số năm/mức ngoại ngữ ở dưới rồi mới lưu được.')}
+          </Alert>
+        </Box>
+      )}
       {canEdit && kind === 'YEARS' && (
         <Box sx={{ pl: '28px', mb: 1.25 }}>
           <TextField

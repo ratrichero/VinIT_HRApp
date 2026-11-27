@@ -686,12 +686,6 @@ class DeterministicMatchingEngine:
         else:
             kind = "SKILL"
 
-        # kind=DEGREE mà không biết bậc: để trống cho HR điền, ĐỪNG đoán. Đoán
-        # bừa một bậc là gán cho ứng viên một ngưỡng chưa ai duyệt, và ngưỡng đó
-        # đi thẳng vào điểm số.
-        if kind == "DEGREE" and required_degree is None:
-            required_degree = None
-
         groups = self._merge_container_delivery_terms(groups)
         groups = self._merge_python_framework_terms(groups)
         return RequirementSpec(
@@ -1159,7 +1153,14 @@ class DeterministicMatchingEngine:
         chunks: list[DocumentChunk],
         candidate_profile: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        required = spec.required_degree_level or 3
+        # Chưa biết bậc thì KHÔNG kết luận gì. Trước đây dòng này là
+        # ``spec.required_degree_level or 3``: tiêu chí "có bằng cấp liên quan"
+        # không nêu bậc bị chấm ngầm theo bậc đại học, nên ứng viên có bằng cao
+        # đẳng bị NO_MATCH vì một ngưỡng chưa ai đặt. Trả ``None`` để tiêu chí
+        # thành unresolved — HR thấy nó cần xử lý thay vì nhận một kết luận bịa.
+        required = spec.required_degree_level
+        if required is None:
+            return None
         education_chunks = [chunk for chunk in chunks if chunk.section == "EDUCATION"]
 
         def highest_in(pool: list[DocumentChunk]) -> tuple[int | None, DocumentChunk | None]:

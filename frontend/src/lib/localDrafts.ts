@@ -120,7 +120,13 @@ export function rubricDraftKey(): string {
   // bản tại một thời điểm. Tách khoá theo phiên bản thì có thể tồn tại hai nháp
   // cùng lúc, và lúc khôi phục phải đoán cái nào mới hơn — đoán sai là mất bản
   // mới. Bản nháp thuộc phiên bản nào được ghi bên trong chính nó.
-  return `${DRAFT_PREFIX}rubric:pending`;
+  //
+  // `:v2` vì hình dạng nháp đã đổi: trước nâng cấp, nháp lưu trường `specs`
+  // (chuỗi JSON của requirement_spec). Nay spec nằm trong chính từng item. Nháp
+  // `:v1` khôi phục vào code mới sẽ mất phần spec — mà mất spec thì DEGREE thành
+  // SKILL, tức âm thầm đổi cách chấm. Tăng phiên bản để nháp cũ bị **bỏ**, không
+  // phải đọc sai: mất một bản nháp chưa lưu là phiền, đổi sai cách chấm là lỗi.
+  return `${DRAFT_PREFIX}rubric:pending:v2`;
 }
 
 /** Xoá mọi nháp rubric đang soạn (dùng khi đã lưu, hoặc khi bắt đầu bộ khác). */

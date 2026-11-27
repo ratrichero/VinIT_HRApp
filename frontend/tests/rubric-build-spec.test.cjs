@@ -142,9 +142,10 @@ test('form chặn trước khi gửi khi thiếu ngưỡng bắt buộc', () => 
   const PAGE = fs.readFileSync(
     path.join(__dirname, '..', 'src', 'app', 'rubrics', 'page.tsx'), 'utf8');
   assert.ok(PAGE.includes('const missingThreshold'), 'thiếu bước kiểm trước khi gửi');
-  assert.ok(PAGE.includes("kind === 'YEARS' && spec?.min_years == null"));
-  assert.ok(PAGE.includes("kind === 'DEGREE' && spec?.required_degree_level == null"));
-  assert.ok(PAGE.includes("kind === 'LANGUAGE'"));
+  // Nay dùng `specProblem` chung thay vì ba nhánh chép tay — xem
+  // requirement-spec-audit-fixes.test.cjs. Điều cần khoá ở đây là *có* bước kiểm.
+  assert.ok(PAGE.includes('specProblem('), 'phải dùng hàm kiểm chung');
+  assert.ok(PAGE.includes('threshold_pending'), 'phải chặn cả ca spec thiếu ngưỡng');
   // Và bước kiểm phải chạy TRƯỚC khi gọi API.
   const checkAt = PAGE.indexOf('const missing = missingThreshold();');
   const callAt = PAGE.indexOf('const result = creating ? await rubricApi.create');

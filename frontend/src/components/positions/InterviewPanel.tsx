@@ -102,9 +102,12 @@ export default function InterviewPanel({ applicationId }: { applicationId: strin
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const response = await interviewsApi.list({});
-      const all: Interview[] = response.data;
-      setItems(all.filter(item => item.application_id === applicationId));
+      // Lọc ở máy chủ. Trước đây gọi `list({})` rồi `.filter()` ở client: mỗi
+      // lần mở/đổi hồ sơ là thêm một GET kéo tới 200 buổi của mọi vị trí, chỉ
+      // để giữ lại vài dòng — và log `profile-transition-requests` cho thấy nó
+      // lặp lại mỗi lần bấm `n`.
+      const response = await interviewsApi.list({ application_id: applicationId });
+      setItems(response.data as Interview[]);
     } catch (err: any) {
       setError(err.response?.data?.detail || t('Không tải được lịch phỏng vấn.'));
     } finally { setLoading(false); }

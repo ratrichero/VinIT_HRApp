@@ -59,28 +59,65 @@ def _sanitize_criteria_response(version: dict) -> dict:
         return version
     for criterion in version.get("criteria") or []:
         if isinstance(criterion, dict) and "requirement_spec" in criterion:
-            criterion["requirement_spec"] = _schema_safe_spec(criterion["requirement_spec"])
+            criterion["requirement_spec"], pending = _schema_safe_spec(criterion["requirement_spec"])
+            criterion["threshold_pending"] = pending
     return version
 
 
-def _schema_safe_spec(spec) -> Optional[dict]:
-    """Return ``spec`` only when the response schema will accept it.
+#: Giá trị hợp lệ để hiển thị khi một tiêu chí chưa có ngưỡng. Không dùng để
+#: chấm điểm — chỉ để response serialize được, còn ``threshold_pending`` mới là
+#: thứ nói cho giao diện biết "chưa có".
+_PENDING_FILL = {
+    "YEARS": ("min_years", 0.0),
+    "DEGREE": ("required_degree_level", 1),
+}
 
-    The response model validates ``requirement_spec``; a spec the schema
-    rejects makes FastAPI fail to serialize the whole response. The client then
-    gets a bare HTTP 500 with no ``detail`` — which the UI can only report as a
-    generic failure, even though the criteria were saved. Validation is optional
-    data: drop it rather than lose the response.
+
+def _schema_safe_spec(spec) -> tuple[Optional[dict], bool]:
+    """Chuẩn hoá ``spec`` cho vừa schema response. Trả ``(spec, threshold_pending)``.
+
+    Vấn đề: ``requirement_spec`` lưu trong DB có thể **thiếu ngưỡng** — HR chọn
+    loại DEGREE nhưng chưa chọn bậc. Đó là trạng thái hợp lệ của quy trình, và
+    cột JSONB không ràng buộc gì. Nhưng response schema thì chặt, nên trả nguyên
+    trạng làm FastAPI không serialize nổi và trả 500 trắng.
+
+    Cách cũ (bỏ spec, trả ``None``) chữa được 500 nhưng gây lỗi nặng hơn: giao
+    diện đọc ``kind`` từ ``null`` ra ``SKILL``, nên **HR không bao giờ thấy ô
+    "Bậc bằng tối thiểu"** để điền — đúng ô cần điền lại bị giấu. Và nếu HR bấm
+    Lưu ở trạng thái đó, form ghi ``SKILL`` đè lên ``DEGREE`` trong DB.
+
+    Cách nay: **giữ** spec, điền tạm một giá trị hợp lệ để qua schema, và bật cờ
+    ``threshold_pending`` để giao diện biết giá trị đó chưa phải quyết định của
+    ai. Ngưỡng thật vẫn trống cho tới khi HR điền.
     """
     if not isinstance(spec, dict):
-        return None
+        return None, False
     try:
         RequirementSpec.model_validate(spec)
-        return spec
+        return spec, False
     except ValidationError:
-        logger.warning("requirement_spec omitted from response: failed schema validation",
-                       kind=spec.get("kind"))
-        return None
+        pass
+
+    kind = str(spec.get("kind") or "").upper()
+    fill = _PENDING_FILL.get(kind)
+    terms = [str(t) for t in (spec.get("terms") or []) if str(t).strip()]
+    if fill and terms:
+        field, value = fill
+        # Chỉ điền khi thiếu đúng ngưỡng đó; spec sai vì lý do khác thì vẫn bỏ,
+        # vì đoán thêm chỉ che một lỗi thật.
+        patched = {**spec, field: value}
+        try:
+            RequirementSpec.model_validate(patched)
+        except ValidationError:
+            patched = None
+        if patched:
+            logger.info("requirement_spec has no threshold yet; flagged as pending",
+                        kind=kind)
+            return patched, True
+
+    logger.warning("requirement_spec omitted from response: failed schema validation",
+                   kind=spec.get("kind"))
+    return None, False
 
 
 def _item_weight_totals(db, criteria_version_id: str) -> dict[str, Decimal]:

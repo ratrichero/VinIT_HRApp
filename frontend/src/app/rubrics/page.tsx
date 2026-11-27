@@ -11,7 +11,7 @@ import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
 import { rubricKeywords } from '@/lib/phase2Workflow';
 import backendProposal from '@/data/rubric-proposal-it-backend.json';
 import RubricItemEditor, { CategoryHeader, groupTotal, type RubricItem } from '@/components/positions/RubricItemEditor';
-import { buildSpec } from '@/lib/requirementSpec';
+import { asRecord, buildSpec, specProblem } from '@/lib/requirementSpec';
 
 type Family = { job_family_id: string; name: string; code: string };
 type Capabilities = { user_id: string; can_create: boolean; can_publish: boolean };
@@ -222,29 +222,22 @@ export default function RubricsPage() {
   /**
    * Chặn trước khi gửi, thay vì để máy chủ trả 422.
    *
-   * Schema đòi YEARS có `min_years`, DEGREE có bậc, LANGUAGE có ngôn ngữ/mức
-   * (audit M1 — tiêu chí chưa có tiêu chuẩn thì không được lưu). Giao diện đã
-   * tự điền ngưỡng khi HR đổi loại, nhưng máy chỉ suy ra được khi mô tả có nêu
-   * con số. Trường hợp còn lại phải nói rõ cho HR biết đang thiếu gì, ở đúng
-   * tiêu chí nào — thay vì một câu 422 chung chung.
+   * Dùng `specProblem` DÙNG CHUNG với trang chi tiết vị trí. Bản chép tay trước
+   * đây lệch với nó: nhánh LANGUAGE chỉ kiểm `required_languages` + IELTS, bỏ
+   * TOEIC/CEFR/rank — nên một tiêu chí ngoại ngữ chỉ có TOEIC 600 bị chặn oan,
+   * kèm câu thông báo nói sai về điều đang thiếu. Đúng kiểu lệch đã gây lỗi 422
+   * một lần rồi.
    */
   const missingThreshold = (): { index: number; message: string } | null => {
     for (let i = 0; i < items.length; i += 1) {
-      const spec = items[i].requirement_spec as Record<string, unknown> | null;
-      const kind = typeof spec?.kind === 'string' ? spec.kind : 'SKILL';
       const label = items[i].name.trim() || `${t('Tiêu chí')} ${i + 1}`;
-      if (kind === 'YEARS' && spec?.min_years == null) {
-        return { index: i, message: `${label}: ${t('chưa có số năm tối thiểu — điền ô "Số năm tối thiểu", hoặc đổi cách so khớp sang "Kỹ năng hoặc công nghệ".')}` };
+      // threshold_pending: máy chủ đã điền tạm một giá trị để hiển thị được,
+      // nhưng chưa ai quyết ngưỡng thật. Vẫn phải chặn lưu.
+      if (items[i].threshold_pending) {
+        return { index: i, message: `${label}: ${t('chưa có ngưỡng — chọn bậc bằng/số năm/mức ngoại ngữ trước khi lưu.')}` };
       }
-      if (kind === 'DEGREE' && spec?.required_degree_level == null) {
-        return { index: i, message: `${label}: ${t('chưa chọn bậc bằng tối thiểu.')}` };
-      }
-      if (kind === 'LANGUAGE') {
-        const hasLanguage = Array.isArray(spec?.required_languages) && (spec!.required_languages as string[]).length > 0;
-        if (!hasLanguage && spec?.required_ielts == null) {
-          return { index: i, message: `${label}: ${t('chưa nêu ngôn ngữ nào, cũng chưa có mức IELTS tối thiểu.')}` };
-        }
-      }
+      const problem = specProblem(asRecord(items[i].requirement_spec));
+      if (problem) return { index: i, message: `${label}: ${t(problem)}` };
     }
     return null;
   };

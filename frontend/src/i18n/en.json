@@ -2086,5 +2086,7 @@
   "Đang lấy…": "Fetching…",
   "Lấy vào ô soạn thảo": "Copy into the editor",
   "Đã lấy từ": "Copied from",
-  "Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.": "Fix the position title, headcount and location before saving."
+  "Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.": "Fix the position title, headcount and location before saving.",
+  "chưa có ngưỡng — chọn bậc bằng/số năm/mức ngoại ngữ trước khi lưu.": "no threshold yet — pick the degree level / years / language level before saving.",
+  "Tiêu chí này chưa có ngưỡng. Chọn bậc bằng/số năm/mức ngoại ngữ ở dưới rồi mới lưu được.": "This criterion has no threshold yet. Pick the degree level / years / language level below before it can be saved."
 }

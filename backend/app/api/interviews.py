@@ -33,6 +33,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.security import get_current_user
+from app.core.exceptions import NotFoundError
 from app.db.database import SessionLocal
 
 router = APIRouter()
@@ -299,14 +300,21 @@ def _detail(db, interview_id: str) -> dict:
 
 
 @router.get("")
-def list_interviews(position_id: UUID | None = None, from_at: datetime | None = None,
+def list_interviews(position_id: UUID | None = None, application_id: UUID | None = None,
+                    from_at: datetime | None = None,
                     to_at: datetime | None = None, mine: bool = Query(False),
                     user: dict = Depends(get_current_user)):
     """Danh sách buổi phỏng vấn trong một khoảng thời gian.
 
-    ``mine=true`` cho màn "Lịch của tôi": chỉ buổi mình là người tham gia.
-    Không có ``mine`` thì phải là HR của vị trí (hoặc HR_LEAD/ADMIN) mới xem được
-    lịch của vị trí đó — lịch phỏng vấn là thông tin về ứng viên.
+    Ba đường vào, và mỗi đường có mức quyền riêng — lịch phỏng vấn là thông tin
+    về ứng viên nên không có đường nào trả về "tất cả":
+
+    * ``position_id`` — phải là HR của vị trí đó (hoặc HR_LEAD/ADMIN).
+    * ``application_id`` — lịch của một hồ sơ; quyền xét trên vị trí của hồ sơ đó.
+    * ``mine=true`` — chỉ buổi mình là người tham gia; mọi tài khoản đang hoạt
+      động đều dùng được, vì nó chỉ trả về lịch của chính họ.
+    * **không tham số** — chỉ HR_LEAD/ADMIN, tức người vốn xem được mọi vị trí.
+      Người khác nhận 403 kèm hướng dẫn dùng ``position_id`` hoặc ``mine``.
     """
     db = SessionLocal()
     try:
@@ -314,6 +322,51 @@ def list_interviews(position_id: UUID | None = None, from_at: datetime | None = 
         _require_active(db, actor)
         clauses = ["1=1"]
         params: dict = {"actor": actor}
+        # Chặn ở đây, KHÔNG chỉ trong nhánh `position_id`.
+        #
+        # Trước đây không có bước này: gọi `GET /interviews` không tham số thì
+        # `clauses` vẫn là ["1=1"], nên bất kỳ tài khoản đang hoạt động — người
+        # phỏng vấn, OBSERVER, HM — nhận tới 200 buổi của MỌI vị trí kèm
+        # `candidate_name`. Docstring của hàm nói ngược lại điều đó, và
+        # `get_interview` (một buổi) thì có kiểm tra — chỉ đường list là thiếu.
+        #
+        # `mine=true` là lịch của chính mình: được phép, và bộ lọc participant
+        # bên dưới giới hạn đúng những buổi mình tham gia.
+        if not mine and not position_id and not application_id:
+            # Không lọc gì mà cũng không phải "lịch của tôi" thì chỉ HR toàn cục
+            # được xem — người khác phải nêu position_id (và sẽ qua kiểm tra vị
+            # trí bên dưới) hoặc dùng mine=true.
+            privileged = db.execute(text("""
+                SELECT EXISTS (SELECT 1 FROM app_private.user_role_assignments ur
+                                WHERE ur.user_id = :actor AND ur.revoked_at IS NULL
+                                  AND ur.role_code IN ('ADMIN','HR_LEAD'))
+            """), {"actor": actor}).scalar_one()
+            if not privileged:
+                raise HTTPException(403, "Cần chọn vị trí, hoặc dùng mine=true để xem lịch của bạn")
+        if application_id:
+            # Lọc theo hồ sơ: đây là thứ màn chi tiết ứng viên cần. Trước đây nó
+            # gọi `GET /interviews` rồi lọc ở client, kéo về tới 200 buổi của
+            # mọi vị trí cho mỗi lần mở hồ sơ.
+            owner = db.execute(text("""
+                SELECT a.position_id FROM app_private.applications a
+                WHERE a.application_id = :app
+            """), {"app": str(application_id)}).mappings().first()
+            if not owner:
+                raise NotFoundError("Application")
+            allowed_on_app = db.execute(text("""
+                SELECT EXISTS (SELECT 1 FROM app_private.user_role_assignments ur
+                                WHERE ur.user_id = :actor AND ur.revoked_at IS NULL
+                                  AND ur.role_code IN ('ADMIN','HR_LEAD'))
+                    OR EXISTS (SELECT 1 FROM app_private.position_assignments pa
+                                WHERE pa.user_id = :actor AND pa.position_id = :position
+                                  AND pa.revoked_at IS NULL
+                                  AND pa.position_role IN ('HR_RECRUITER','HR_LEAD'))
+            """), {"actor": actor, "position": str(owner["position_id"])}).scalar_one()
+            if not allowed_on_app:
+                raise HTTPException(403, "Không có quyền xem lịch của hồ sơ này")
+            clauses.append("i.application_id = :application")
+            params["application"] = str(application_id)
+
         if position_id:
             allowed = db.execute(text("""
                 SELECT EXISTS (SELECT 1 FROM app_private.user_role_assignments ur

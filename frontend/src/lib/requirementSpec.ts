@@ -33,10 +33,14 @@ export const KIND_LABEL: Record<SpecKind, string> = {
 /** Chấp nhận cả object có kiểu riêng (``RequirementSpec``) lẫn JSONB thô. */
 export type RawSpec = object | null | undefined;
 
+/** Ép về Record để truy cập khoá động; đầu vào rác thì thành object rỗng. */
+export function asRecord(spec: RawSpec): Record<string, unknown> {
+  return (spec && typeof spec === 'object' ? spec : {}) as Record<string, unknown>;
+}
+
 /** Đọc ``kind`` từ JSONB tự do; spec hỏng hoặc lạ thì coi như SKILL. */
 export function specKindOf(spec: RawSpec): SpecKind {
-  const asRecord = (spec && typeof spec === 'object' ? spec : {}) as Record<string, unknown>;
-  const raw = typeof asRecord.kind === 'string' ? (asRecord.kind as string).toUpperCase() : '';
+  const raw = typeof asRecord(spec).kind === 'string' ? (asRecord(spec).kind as string).toUpperCase() : '';
   return (SPEC_KINDS as readonly string[]).includes(raw) ? (raw as SpecKind) : 'SKILL';
 }
 

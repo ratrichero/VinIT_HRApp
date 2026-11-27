@@ -274,7 +274,7 @@ export const adminApi = {
 
 export const interviewsApi = {
   // `mine` cho màn "Lịch của tôi"; thiếu nó thì phải là HR của vị trí.
-  list: (params: { position_id?: string; from_at?: string; to_at?: string; mine?: boolean }) =>
+  list: (params: { position_id?: string; application_id?: string; from_at?: string; to_at?: string; mine?: boolean }) =>
     apiClient.get('/interviews', { params }),
   get: (id: string) => apiClient.get(`/interviews/${id}`),
   create: (data: {

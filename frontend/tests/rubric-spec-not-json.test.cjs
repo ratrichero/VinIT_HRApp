@@ -50,19 +50,22 @@ test('đổi loại tiêu chí giữ nguyên phần còn lại của spec', () =
   // Nếu ghi đè cả object, một tiêu chí "3 năm Python" do AI sinh sẽ mất
   // `terms` ngay khi HR đổi loại — điểm chấm sẽ sai âm thầm.
   // Trải object cũ trước rồi mới ghi `kind` là cách duy nhất giữ được phần kia.
-  assert.ok(
-    EDITOR.includes('...(spec || {}), kind: next'),
-    'phải trải object cũ rồi mới ghi đè kind',
-  );
-  // Và chỉ được xoá ngưỡng của loại KHÔNG còn được chọn.
-  assert.ok(EDITOR.includes("if (next !== 'YEARS') base.min_years = null"));
-  assert.ok(EDITOR.includes("if (next !== 'DEGREE') base.required_degree_level = null"));
+  // Nay việc này nằm trong `withKind` dùng chung (xem requirementSpec.ts) —
+  // chép lại ở đây chính là cách lỗi 422 lần trước sinh ra.
+  assert.ok(EDITOR.includes('withKind(spec, next)'), 'phải dùng withKind chung');
+  const MODULE = stripComments(read('src', 'lib', 'requirementSpec.ts'));
+  // Regex thay vì so chuỗi: code thật có thể bọc thêm ngoặc/ép kiểu.
+  assert.ok(/\.\.\.\(*\(?spec && typeof spec === 'object'/.test(MODULE),
+    'withKind phải trải object cũ rồi mới ghi đè kind');
+  assert.ok(MODULE.includes("if (next !== 'YEARS') base.min_years = null"));
+  assert.ok(MODULE.includes("if (next !== 'DEGREE') base.required_degree_level = null"));
 });
 
 test('spec hỏng không làm trắng form', () => {
   // spec có thể là null, chuỗi, hoặc object thiếu kind — hàm đọc phải chịu được.
   assert.ok(SPEC_MODULE.includes('export function specKindOf'), 'thiếu hàm đọc kind an toàn');
-  assert.ok(SPEC_MODULE.includes("typeof asRecord.kind === 'string'"), 'không kiểm kiểu trước khi đọc kind');
+  assert.ok(SPEC_MODULE.includes("typeof asRecord(spec).kind === 'string'"),
+    'không kiểm kiểu trước khi đọc kind');
 });
 
 test('"Phân tách bằng dấu phẩy" nằm trong tooltip, không chiếm chỗ dưới ô nhập', () => {
