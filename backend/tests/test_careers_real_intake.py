@@ -51,12 +51,57 @@ def test_intake_optin_withdraw_and_idempotent_retry(client, ready):
             JOIN app_private.application_identities i USING (application_id) JOIN app_private.talent_pool_consents c USING (application_id)
             JOIN app_private.application_documents d USING (application_id) WHERE r.request_id=:req"""), {'req': req}).all()
         assert len(rows) == 1 and rows[0][0:5] == ('COMMITTED', None, 'CAREERS', 'Synthetic Person', 'candidate@example.test')
-        assert rows[0][5] == careers_intake.TEST_NOTICE and rows[0][6] != token
+        assert rows[0][5] == careers_intake.CONSENT_NOTICE and rows[0][6] != token
         assert os.path.isfile(os.path.join(settings.LOCAL_STORAGE_PATH, settings.SUPABASE_STORAGE_BUCKET_CV, rows[0][7]))
     assert client.post('/v1/talent-pool/withdraw', json={'token': token}).status_code == 200
     with engine.connect() as conn:
         assert conn.execute(text('SELECT withdrawn_at IS NOT NULL FROM app_private.talent_pool_consents WHERE token_hash=:hash'), {'hash': careers_intake.hashlib.sha256(token.encode()).hexdigest()}).scalar_one()
 
+
+def test_non_optin_application_still_gets_consent_evidence(client, ready):
+    """Hồ sơ KHÔNG chọn Talent Pool vẫn phải có dòng consent.
+
+    Câu đồng ý trên form là bắt buộc và đã gộp hai mục đích (nộp + lưu 12
+    tháng), nên nộp là đã đồng ý. Nếu dòng consent chỉ xuất hiện khi opt-in thì
+    phần lớn hồ sơ không có bằng chứng, và không trả lời được "giữ đến bao giờ".
+    """
+    seed, content = ready
+    req = str(uuid4())
+    assert send(client, seed, content, req).status_code == 202
+    with engine.connect() as conn:
+        row = conn.execute(text("""SELECT c.notice_version, c.withdrawn_at,
+                   c.retention_expires_at - c.accepted_at AS retention
+            FROM app_private.careers_intake_receipts r
+            JOIN app_private.talent_pool_consents c USING (application_id)
+            WHERE r.request_id=:req"""), {'req': req}).one()
+        assert row[0] == careers_intake.CONSENT_NOTICE
+        assert row[1] is None, 'hồ sơ mới nộp không được ở trạng thái đã rút'
+        # Đúng 12 tháng, không phải xấp xỉ: cam kết với ứng viên là 365 ngày.
+        assert abs(row[2].days - careers_intake.RETENTION_DAYS) <= 1, row[2]
+
+
+def test_real_email_domain_is_accepted(client, ready):
+    """Địa chỉ ngoài @example.test phải nộp được, và được lưu nguyên văn.
+
+    Đây chính là thứ đã chặn ứng viên thật trước đây (400 "vòng thử nghiệm").
+    """
+    seed, content = ready
+    req = str(uuid4())
+    email = 'ung.vien@congty-that.example'
+    assert send(client, seed, content, req, email=email).status_code == 202
+    with engine.connect() as conn:
+        stored = conn.execute(text("""SELECT i.email FROM app_private.careers_intake_receipts r
+            JOIN app_private.application_identities i USING (application_id)
+            WHERE r.request_id=:req"""), {'req': req}).scalar_one()
+        assert stored == email
+
+
+def test_malformed_email_is_still_rejected(client, ready):
+    """Bỏ chặn tên miền không có nghĩa là nhận chuỗi bất kỳ."""
+    seed, content = ready
+    for bad in ('khong-phai-email', 'a@@b', ''):
+        response = send(client, seed, content, str(uuid4()), email=bad)
+        assert response.status_code in (400, 422), (bad, response.status_code)
 
 def test_antivirus_fail_closed_before_validation_or_storage(client, ready, monkeypatch):
     seed, content = ready
