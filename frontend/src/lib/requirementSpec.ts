@@ -138,6 +138,29 @@ export function specProblem(spec: Record<string, unknown> | null | undefined): s
 
 
 /**
+ * Cờ "chưa có ngưỡng" của MỘT spec, tính lại sau khi HR sửa.
+ *
+ * Máy chủ đánh cờ ``threshold_pending`` khi nó phải điền tạm một giá trị để
+ * response serialize được (``api/criteria.py`` → ``_PENDING_FILL``). Cờ đó nói
+ * "ngưỡng này chưa phải quyết định của ai". Nhưng nếu giao diện chỉ HIỆN cờ mà
+ * không BAO GIỜ xoá nó, thì sau khi HR chọn bậc bằng xong, trang vẫn chặn lưu
+ * với câu "chưa có ngưỡng" — ngõ cụt: không lưu được, mà tải lại thì máy chủ
+ * vẫn thấy ngưỡng cũ trong DB nên vẫn đánh cờ.
+ *
+ * Vì vậy cờ phải được tính lại từ chính spec sau mỗi lần sửa. Chỉ hai loại
+ * dưới đây có ngưỡng bắt buộc và được máy chủ điền tạm — đúng như
+ * ``_PENDING_FILL``; loại khác trả ``false`` để không hiện cảnh báo sai.
+ */
+export function pendingAfterEdit(spec: RawSpec): boolean {
+  const s = asRecord(spec);
+  const kind = specKindOf(s);
+  const has = (v: unknown) => v !== null && v !== undefined && v !== '';
+  if (kind === 'YEARS') return !has(s.min_years);
+  if (kind === 'DEGREE') return !has(s.required_degree_level);
+  return false;
+}
+
+/**
  * Ép kết quả về đúng kiểu mà ``api.ts`` khai báo (``RequirementSpec``).
  *
  * Kiểu đó đòi ``kind``/``terms``/``required_languages`` luôn có — đúng với thứ

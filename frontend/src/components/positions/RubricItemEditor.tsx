@@ -9,7 +9,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/i18n/I18nProvider';
 import { rubricApi } from '@/lib/api';
 import {
-  KIND_LABEL, specKindOf, SPEC_KINDS, withKind, type SpecKind,
+  KIND_LABEL, pendingAfterEdit, specKindOf, SPEC_KINDS, withKind, type SpecKind,
 } from '@/lib/requirementSpec';
 
 export type RubricItem = {
@@ -80,9 +80,16 @@ export default function RubricItemEditor({
   const kind = specKindOf(spec);
   const keywordList = keywords.split(',').map(k => k.trim()).filter(Boolean);
 
-  /** Đổi một khoá trong spec, giữ nguyên phần còn lại. */
+  /**
+   * Đổi một khoá trong spec, giữ nguyên phần còn lại.
+   *
+   * Cờ `threshold_pending` được tính lại từ spec vừa sửa, không giữ nguyên giá
+   * trị máy chủ gửi về: HR vừa chọn bậc bằng thì cờ phải tắt ngay, nếu không
+   * trang vẫn chặn lưu với câu "chưa có ngưỡng" dù ngưỡng đã có.
+   */
   const patchSpec = (patch: Record<string, unknown>) => {
-    onChange({ requirement_spec: { ...(spec || {}), ...patch } });
+    const next = { ...(spec || {}), ...patch };
+    onChange({ requirement_spec: next, threshold_pending: pendingAfterEdit(next) });
   };
 
   /**
@@ -105,7 +112,8 @@ export default function RubricItemEditor({
       const inferred = data.requirement_spec as Record<string, unknown>;
       // Giữ loại HR vừa chọn: máy có thể suy ra loại khác (ví dụ mô tả nêu cả
       // số năm lẫn bằng cấp), nhưng ý người dùng phải thắng.
-      onChange({ requirement_spec: keepKind ? { ...inferred, kind: keepKind } : inferred });
+      const next = keepKind ? { ...inferred, kind: keepKind } : inferred;
+      onChange({ requirement_spec: next, threshold_pending: pendingAfterEdit(next) });
     } catch (err: any) {
       setResyncError(err.response?.data?.detail || t('Không suy lại được.'));
     } finally {
@@ -134,7 +142,7 @@ export default function RubricItemEditor({
     // …`. Chép tay chính là cách lỗi 422 lần trước sinh ra: trang rubric và
     // trang vị trí lệch nhau vì mỗi nơi tự viết một bản.
     const base = withKind(spec, next);
-    onChange({ requirement_spec: base });
+    onChange({ requirement_spec: base, threshold_pending: pendingAfterEdit(base) });
     // Loại mới cần ngưỡng mà chưa có: mượn luôn đường suy luận của nút
     // "Suy lại", chỉ để điền sẵn — không ghi đè thứ HR đã nhập.
     const needsThreshold = (

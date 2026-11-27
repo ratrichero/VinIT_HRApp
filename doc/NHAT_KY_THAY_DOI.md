@@ -9,6 +9,61 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — Chuỗi lỗi "bằng cấp": cờ `threshold_pending` phải tắt được, và script đếm dữ liệu cũ
+
+**Trạng thái khi bắt đầu.** Arena đã sửa hai phần trong `eb48521`: bỏ
+`required_degree_level or 3` (giờ trả `unresolved`), và giữ spec DEGREE trong
+response kèm cờ `threshold_pending` thay vì bỏ hẳn spec. Dead code
+`required_degree = None` cũng đã biến mất. Hướng được chọn: **schema giữ chặt**,
+cờ "cần xem lại" nằm ở response — không nới schema.
+
+**Lỗi còn lại, đo được bằng cách đọc mã.** Cờ đó chỉ được máy chủ tính lại khi tải
+trang. `patchSpec`, `changeKind` và `resync` trong `RubricItemEditor.tsx` chỉ gửi
+`requirement_spec`, không đụng `threshold_pending` trong state. Nên: HR chọn xong
+bậc bằng → `missingThreshold()` vẫn thấy `items[i].threshold_pending === true` →
+vẫn chặn lưu với câu "chưa có ngưỡng"; tải lại trang thì máy chủ đọc ngưỡng cũ
+trong DB nên vẫn đánh cờ. **Ngõ cụt: không lưu được, cũng không thoát ra được.**
+
+**Sửa.** Thêm `pendingAfterEdit(spec)` vào `lib/requirementSpec.ts` — tính cờ từ
+chính spec vừa sửa, đúng hai loại có ngưỡng bắt buộc (`YEARS`, `DEGREE`, khớp
+`_PENDING_FILL` của máy chủ). Ba đường sửa spec trong editor đều truyền cờ đã
+tính lại. Chốt chặn ở trang rubric giữ nguyên: item chưa ai sửa thì cờ vẫn đúng.
+
+**Test mới.** `frontend/tests/requirement-spec-pending.test.cjs` (4 test, đã khai
+trong `test:unit`): xét đúng hai ngưỡng, và cả ba đường sửa spec đều truyền cờ.
+
+**Kiểm ngược (cả hai đầu chuỗi).**
+
+| Gỡ dòng sửa | Kết quả |
+| --- | --- |
+| trả `patchSpec` về `onChange({ requirement_spec: next })` | đúng 1 test đỏ (`patchSpec tính lại cờ…`), 3 test còn xanh |
+| trả `_evaluate_degree` về `spec.required_degree_level or 3` | đúng 1 test đỏ (`test_degree_without_a_level_never_decides_anything`), 7 test còn xanh |
+
+Cả hai đã phục hồi mã.
+
+**Script chỉ đọc.** `backend/scripts/audit_degree_specs.py` đếm tiêu chí DEGREE
+đang thiếu bậc trong DB đã có, phân theo trạng thái bộ tiêu chí và theo vị trí;
+có `--json`. Chỉ chạy `SELECT`, không tạo migration. Đo thật trên DB cục bộ:
+
+```
+DB trắng : DEGREE 0, thiếu bậc 0
+Sau khi chèn 2 tiêu chí DEGREE (1 thiếu bậc, 1 có bậc 3):
+  DEGREE 2, thiếu bậc 1 — DRAFT 1/2 — PROBE-DEGREE 1
+Sau khi dọn: về 0
+```
+
+Tức script đếm đúng cả hai chiều, không đếm nhầm tiêu chí đã có bậc.
+
+**Đã chạy.** `tsc` sạch; `test:unit` **234 pass** (230 + 4 test mới); `test:i18n`
+pass; `next build` exit 0; `pytest backend/tests` trên PostgreSQL cục bộ **918
+passed, 0 skipped**; ruff đúng phạm vi CI (`--select F` trên danh sách file trong
+`ci.yml`) — All checks passed.
+
+**Chưa kiểm.** Chưa mở giao diện bấm thử luồng "HR điền bậc rồi Lưu": sửa này
+kiểm bằng test cấu trúc + đọc mã, không phải bằng thao tác thật. Ruff ngoài phạm
+vi CI còn 2 lỗi F401 có sẵn trong `backend/app/api/notifications.py` (file của
+arena, `datetime` và `HTTPAuthorizationCredentials` không dùng) — chưa sửa.
+
 ## 2026-11-27 — Quyền `GET /interviews`: test mức DB, và một lỗi 500 lộ ra theo
 
 **Vấn đề.** Audit `doc/AUDIT_2026-11-27_NANG_CAP_GAN_DAY.md` mục 1 tìm ra `GET
