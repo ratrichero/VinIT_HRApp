@@ -54,7 +54,7 @@ import PositionSummary from '@/components/workflow/PositionSummary';
 import OperationProgressPanel from '@/components/workflow/OperationProgressPanel';
 import InvalidFileList from '@/components/workflow/InvalidFileList';
 import CVIntakePanel from '@/components/positions/CVIntakePanel';
-import { asApiSpec, buildSpec, specProblem, withKind, KIND_LABEL, SPEC_KINDS } from '@/lib/requirementSpec';
+import { asApiSpec, buildSpec, specKindOf, specProblem, withKind, KIND_LABEL, SPEC_KINDS } from '@/lib/requirementSpec';
 import ApplyRubric from '@/components/positions/ApplyRubric';
 import { EMPLOYMENT_TYPES } from '@/lib/employmentTypes';
 import HiringManagerChange from './HiringManagerChange';
@@ -82,12 +82,19 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
+/**
+ * Một dòng tóm tắt "máy sẽ so khớp tiêu chí này thế nào", viết cho HR đọc.
+ *
+ * Trước đây dòng này mở đầu bằng chính mã ``SKILL``/``YEARS`` — đúng thứ mà cả
+ * hai trang vừa bỏ khỏi ô nhập, mang từ backend ra giao diện. Nay dùng nhãn
+ * tiếng Việt chung (``KIND_LABEL``), nên HR đọc được mà không cần biết enum.
+ */
 function requirementSpecSummary(criterion: Criterion, t: (text: string) => string): string {
   const spec = criterion.requirement_spec;
-  if (!spec) return t("Chưa có đặc tả yêu cầu cấu trúc; hệ thống sẽ suy luận bản nháp khi HR duyệt.");
-  const details: string[] = [spec.kind];
-  if (spec.min_years != null) details.push(`≥ ${spec.min_years} ${t("năm")}`);
-  if (spec.required_degree_level != null) details.push(`${t("bậc bằng")} ${spec.required_degree_level}`);
+  if (!spec) return t("Máy đọc tên và mô tả để tự suy ra cách so khớp.");
+  const details: string[] = [t(KIND_LABEL[specKindOf(spec)])];
+  if (spec.min_years != null) details.push(`${t("từ")} ${spec.min_years} ${t("năm")}`);
+  if (spec.required_degree_level != null) details.push(`${t("từ bậc")} ${spec.required_degree_level}`);
   if (spec.required_ielts != null) details.push(`IELTS ${spec.required_ielts}`);
   if (spec.required_toeic != null) details.push(`TOEIC ${spec.required_toeic}`);
   if (spec.required_cefr) details.push(spec.required_cefr);
@@ -526,6 +533,13 @@ export default function PositionDetailPage() {
   const isHR = myPositionRoles.has('HR_RECRUITER') || myPositionRoles.has('HR_LEAD') || mySystemRoles.has('ADMIN') || mySystemRoles.has('HR_LEAD');
   const isHM = myPositionRoles.has('HIRING_MANAGER');
   const canDirectApprove = mySystemRoles.has('ADMIN') || mySystemRoles.has('HR_LEAD') || myPositionRoles.has('HR_LEAD');
+  /**
+   * Bộ tiêu chí đang chờ duyệt (chưa APPROVED).
+   *
+   * Dùng để khỏi nhắc cùng một việc hai lần: khối duyệt ở tab Tiêu chí đã nêu
+   * trạng thái + nút bấm, nên "Hành động tiếp theo" ở khối tổng quan là thừa.
+   */
+  const criteriaAwaitingApproval = !!currentCriteria && currentCriteria.status !== 'APPROVED';
   const isSameApprover = !!currentCriteria?.approved_by_hr && currentCriteria.approved_by_hr === me?.user_id;
   const canEditCriteria = isHR && !!currentCriteria && ['DRAFT', 'PENDING_HR_REVIEW'].includes(currentCriteria.status);
   const criteriaByCategory = (category: Criterion['category']) => currentCriteria?.criteria.filter(item => item.category === category) || [];
@@ -743,9 +757,14 @@ export default function PositionDetailPage() {
             <Divider sx={{ my: 1.5 }} />
             <PositionSummary workspace={workspace} isHR={isHR} />
             <Divider sx={{ my: 1.5 }} />
-            {/* Mỗi hàng một việc: khi số liệu và hành động nằm chung một hàng, nút hành động
-                bị đẩy xuống dưới và lơ lửng giữa thẻ vì khối chứa nó co theo nội dung. */}
-            <NextActionCard workspace={workspace} onAction={handleNextAction} bare />
+            {/* "Hành động tiếp theo" chỉ hiện khi việc kế tiếp KHÔNG phải là duyệt tiêu
+                chí. Lúc bộ tiêu chí còn nháp, khối duyệt ngay dưới đã nói đúng việc đó
+                và có sẵn nút bấm — để cả hai thì cùng một câu xuất hiện hai lần, cách
+                nhau vài chục pixel, kèm hai nút cùng ý nghĩa.
+
+                Mỗi hàng một việc: khi số liệu và hành động nằm chung một hàng, nút hành
+                động bị đẩy xuống dưới và lơ lửng giữa thẻ vì khối chứa nó co theo nội dung. */}
+            {!criteriaAwaitingApproval && <NextActionCard workspace={workspace} onAction={handleNextAction} bare />}
           </CardContent>
         </Card>
       )}
@@ -805,13 +824,6 @@ export default function PositionDetailPage() {
 
       {/* Tab 1: Criteria & Approval */}
       <TabPanel value={activeTab} index={0}>
-        {currentCriteria?.source_template_version_id && <Alert severity="info" sx={{ mb: 2 }}>{t("Nguồn phiên bản rubric")}: {currentCriteria.source_template_version_id}</Alert>}
-        {isHR && currentCriteria?.status === 'DRAFT' && <Alert severity="info" sx={{ mb: 2 }} action={
-          <Button color="inherit" size="small" onClick={() => { setDiscardDraftError(null); setDiscardDraftOpen(true); }}>
-            {t('Huỷ bản nháp này')}
-          </Button>}>
-          {t('Đang là bản nháp. Nếu muốn dùng rubric mẫu có sẵn thay cho bộ AI đề xuất, hãy huỷ bản nháp trước rồi bấm “Dùng rubric đã xuất bản”.')}
-        </Alert>}
         {criteriaStale && <Alert severity="warning" sx={{ mb: 2 }}>{t("JD đã thay đổi. Cần tạo và duyệt bộ tiêu chí cho phiên bản mới trước khi tải hoặc đánh giá CV.")}</Alert>}
         {isHM && isSameApprover && currentCriteria?.status === 'PENDING_HM_APPROVAL' && <Alert severity="warning" sx={{ mb: 2 }}>{t("Hai bước duyệt phải do hai tài khoản khác nhau thực hiện. Vui lòng nhờ Hiring Manager khác được phân công duyệt.")}</Alert>}
         {/* Duyệt tiêu chí — đưa lên đầu tab: trước đây nằm dưới cả danh sách tiêu chí
@@ -822,20 +834,25 @@ export default function PositionDetailPage() {
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flex: 1, minWidth: 260 }}>
                 <WarningIcon sx={{ color: '#B54708', mt: 0.25 }} />
                 <Box>
-                  <Typography variant="body1" fontWeight={700} color="#B54708">
-                    {currentCriteria.status === 'DRAFT' && t("Chờ HR Recruiter rà soát tiêu chí")}
-                    {currentCriteria.status === 'PENDING_HR_REVIEW' && t("Chờ HR Recruiter xác nhận quy trình")}
-                    {currentCriteria.status === 'PENDING_HM_APPROVAL' && t("Chờ Hiring Manager duyệt chuyên môn")}
-                    {currentCriteria.status === 'REJECTED' && t("Bộ tiêu chí đã bị từ chối")}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                    {currentCriteria.status === 'PENDING_HM_APPROVAL'
-                      ? t("Sau khi HM duyệt, bộ tiêu chí sẽ được khóa và dùng để đánh giá ứng viên.")
-                      : t("Sau khi HR duyệt, hệ thống sẽ chuyển sang bước phê duyệt của Hiring Manager.")}
-                  </Typography>
-                  <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
-                    {t("Vai trò của bạn:")} {myRoleLabels}
-                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography variant="body1" fontWeight={700} color="#B54708">
+                      {currentCriteria.status === 'DRAFT' && t("Chờ HR Recruiter rà soát")}
+                      {currentCriteria.status === 'PENDING_HR_REVIEW' && t("Chờ HR Recruiter xác nhận")}
+                      {currentCriteria.status === 'PENDING_HM_APPROVAL' && t("Chờ Hiring Manager duyệt")}
+                      {currentCriteria.status === 'REJECTED' && t("Bộ tiêu chí đã bị từ chối")}
+                    </Typography>
+                    <Typography variant="caption" color="text.disabled">
+                      {t("Vai trò của bạn:")} {myRoleLabels}
+                    </Typography>
+                  </Box>
+                  {/* Chỉ giữ một câu cho bước hiện tại. Mô tả quy trình chung ("sau khi
+                      HR duyệt sẽ chuyển sang HM…") HR đã biết, và nó lặp lại ở dòng
+                      trạng thái ngay trên. */}
+                  {currentCriteria.status === 'PENDING_HM_APPROVAL' && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                      {t("Duyệt xong bộ tiêu chí sẽ được khóa để chấm điểm.")}
+                    </Typography>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -845,6 +862,9 @@ export default function PositionDetailPage() {
                   <>
                     {isHR && (
                       <>
+                        {/* Hai cách bỏ bộ tiêu chí hiện tại, đặt cạnh nhau vì cùng
+                            một quyết định. "Huỷ bản nháp" chỉ có khi còn DRAFT. */}
+                        <Button variant="text" color="inherit" size="small" onClick={() => { setDiscardDraftError(null); setDiscardDraftOpen(true); }} disabled={approving}>{t("Huỷ bản nháp")}</Button>
                         <Button variant="outlined" color="error" onClick={() => { setApprovalComment(''); setApprovalAction('REJECT'); }} disabled={approving}>{t("Từ chối")}</Button>
                         <Button variant="contained" color="secondary" startIcon={<CheckCircleIcon />} onClick={() => handleApprove('APPROVE')} disabled={approving || criteriaStale || !itemWeightsValid}>{t("HR duyệt & gửi HM")}</Button>
                         {canDirectApprove && (
@@ -852,7 +872,7 @@ export default function PositionDetailPage() {
                         )}
                       </>
                     )}
-                    {!isHR && <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>{t("Chờ HR Recruiter rà soát")}</Typography>}
+
                   </>
                 ) : currentCriteria.status === 'PENDING_HM_APPROVAL' ? (
                   <>
@@ -927,7 +947,7 @@ export default function PositionDetailPage() {
                         mr: 2,
                       }}
                     />
-                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{t("                      Tiêu chí bắt buộc (")}{currentCriteria.mandatory_weight_total}{t("% tổng điểm)")}</Typography>
+                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{`(${currentCriteria.mandatory_weight_total}% ${t("tổng điểm")})`}</Typography>
                   </Box>
                   <Divider sx={{ mb: 2 }} />
                   <List disablePadding>
@@ -961,8 +981,7 @@ export default function PositionDetailPage() {
                       ))}
                   </List>
                   <Divider sx={{ my: 2 }} />
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                    <Typography variant="body2" color={Math.abs(itemWeightTotals.MUST_HAVE - 100) < 0.005 ? 'text.secondary' : 'error'}>{t("Tổng trong nhóm:")} {formatPercent(itemWeightTotals.MUST_HAVE)}% / 100%</Typography>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
                     {canEditCriteria && <Button size="small" startIcon={<AddIcon />} onClick={() => startAddCriterion('MUST_HAVE')}>{t("Thêm tiêu chí")}</Button>}
                   </Box>
                 </CardContent>
@@ -985,7 +1004,7 @@ export default function PositionDetailPage() {
                         mr: 2,
                       }}
                     />
-                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{t("                      Tiêu chí ưu tiên (")}{currentCriteria.nice_to_have_weight_total}{t("% tổng điểm)")}</Typography>
+                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{`(${currentCriteria.nice_to_have_weight_total}% ${t("tổng điểm")})`}</Typography>
                   </Box>
                   <Divider sx={{ mb: 2 }} />
                   <List disablePadding>
@@ -1019,8 +1038,7 @@ export default function PositionDetailPage() {
                       ))}
                   </List>
                   <Divider sx={{ my: 2 }} />
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                    <Typography variant="body2" color={criteriaByCategory('NICE_TO_HAVE').length === 0 || Math.abs(itemWeightTotals.NICE_TO_HAVE - 100) < 0.005 ? 'text.secondary' : 'error'}>{t("Tổng trong nhóm:")} {formatPercent(itemWeightTotals.NICE_TO_HAVE)}% / 100%</Typography>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
                     {canEditCriteria && <Button size="small" startIcon={<AddIcon />} onClick={() => startAddCriterion('NICE_TO_HAVE')}>{t("Thêm tiêu chí")}</Button>}
                   </Box>
                 </CardContent>
@@ -1227,14 +1245,16 @@ export default function PositionDetailPage() {
               onChange={e => setEditingCriterion({ ...editingCriterion, weight_in_group: Number(e.target.value) })}
               inputProps={{ min: 0, max: 100, step: 0.1 }} helperText={t("Tổng các tiêu chí trong cùng nhóm phải bằng 100%. Dùng Điều chỉnh trọng số tiêu chí để cân lại toàn nhóm.")} />
             <FormControl fullWidth>
-              <InputLabel id="requirement-kind-label">{t("Loại yêu cầu")}</InputLabel>
-              <Select labelId="requirement-kind-label" label={t("Loại yêu cầu")}
+              <InputLabel id="requirement-kind-label">{t("Cách máy so khớp")}</InputLabel>
+              <Select labelId="requirement-kind-label" label={t("Cách máy so khớp")}
                 value={editingCriterion.requirement_spec?.kind || 'SKILL'}
                 onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: asApiSpec(withKind(editingCriterion.requirement_spec, e.target.value as RequirementSpec['kind'])) })}>
                 {SPEC_KINDS.map(k => <MenuItem key={k} value={k}>{t(KIND_LABEL[k])}</MenuItem>)}
               </Select>
             </FormControl>
-            <TextField label={t("Thuật ngữ bằng chứng (phân tách bằng dấu phẩy)")} fullWidth
+            <TextField label={t("Từ khoá bằng chứng")} fullWidth
+              placeholder={t("Python, FastAPI, PostgreSQL")}
+              helperText={t("Cách nhau bằng dấu phẩy.")}
               value={(editingCriterion.requirement_spec?.terms || []).join(', ')}
               onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...(editingCriterion.requirement_spec || { kind: 'SKILL', required_languages: [] }), terms: e.target.value.split(',').map(item => item.trim()).filter(Boolean), required_languages: editingCriterion.requirement_spec?.required_languages || [] } })} />
             {editingCriterion.requirement_spec?.kind === 'YEARS' && (
@@ -1248,8 +1268,9 @@ export default function PositionDetailPage() {
                 inputProps={{ min: 1, max: 5, step: 1 }} />
             )}
             {editingCriterion.requirement_spec?.kind === 'LANGUAGE' && (<>
-              <TextField label={t("Ngôn ngữ (phân tách bằng dấu phẩy)")} fullWidth
+              <TextField label={t("Ngôn ngữ")} fullWidth
                 value={(editingCriterion.requirement_spec.required_languages || []).join(', ')}
+                placeholder={t("Tiếng Anh, Tiếng Nhật")}
                 onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...editingCriterion.requirement_spec!, required_languages: e.target.value.split(',').map(item => item.trim()).filter(Boolean) } })} />
               <TextField label="IELTS" type="number" fullWidth value={editingCriterion.requirement_spec.required_ielts ?? ''}
                 onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...editingCriterion.requirement_spec!, required_ielts: e.target.value === '' ? null : Number(e.target.value) } })}
