@@ -316,6 +316,9 @@ export default function RubricsPage() {
           <Button onClick={useProposal} disabled={busy} sx={{ justifyContent: 'flex-start', textAlign: 'left' }}>{t('Dùng bộ mẫu ví dụ (Backend Python)')}</Button>
           <Typography variant="caption">{t('Bộ mẫu ví dụ là tiêu chí viết sẵn trong mã nguồn, KHÔNG phải AI sinh ra. Hai nút "Sinh từ JD" mới gọi AI: một nút đọc JD của vị trí đã có, một nút đọc JD anh dán vào — dùng khi muốn dựng rubric trước khi mở vị trí. Cả ba đều chỉ điền biểu mẫu, HR phải rà soát rồi bấm lưu.')}</Typography>
         </Stack>}
+        {!capabilities.can_create && <Alert severity="warning" sx={{ mt: 1 }}>
+          {t('Tài khoản của bạn xem được thư viện nhưng không tạo được rubric. Cần vai trò HR tuyển dụng, Trưởng nhóm HR hoặc Quản trị viên — nhờ Quản trị viên cấp trong mục Người dùng.')}
+        </Alert>}
         {versions.length === 0 && <Typography sx={{ mt: 2 }}>{t('Chưa có rubric nào.')}</Typography>}
         {versions.map(v => <Button key={v.template_version_id} fullWidth sx={{ mt: 1, justifyContent: 'flex-start', textAlign: 'left' }} variant={selected?.template_version_id === v.template_version_id ? 'outlined' : 'text'} disabled={busy} onClick={() => select(v.template_version_id)}>{v.title} · v{v.version_number} · {statusLabel(v.status, t)} · {families.find(f => f.job_family_id === v.job_family_id) ? familyLabel(families.find(f => f.job_family_id === v.job_family_id)!.code, v.family_name || '', t) : v.family_name}</Button>)}
       </CardContent></Card>

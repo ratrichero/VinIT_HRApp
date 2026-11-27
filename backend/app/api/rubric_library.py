@@ -91,7 +91,12 @@ def _require_directory(db, actor, lock=False):
 
 def _require_editor(db, actor, owner=None):
     roles, assigned = _require_directory(db, actor, lock=True)
-    if 'HR_LEAD' not in roles and not ((assigned or 'HR_RECRUITER' in roles) and (owner is None or str(owner) == actor)):
+    # ADMIN đứng cùng HR_LEAD: quản trị viên hệ thống phải dựng được thư viện
+    # rubric, nếu không thì một mình ADMIN không thể tạo nội dung nào — thư viện
+    # rỗng vĩnh viễn vì ADMIN cũng là người cấu hình nhóm vị trí. Mọi endpoint
+    # phân quyền khác đều đã có ADMIN (positions, scorecards, dashboard,
+    # shortlist); riêng chỗ này bỏ sót. Xuất bản vẫn giữ nguyên chỉ HR_LEAD.
+    if not roles.intersection({'ADMIN', 'HR_LEAD'}) and not ((assigned or 'HR_RECRUITER' in roles) and (owner is None or str(owner) == actor)):
         raise HTTPException(403, 'Chỉ HR tạo bản nháp hoặc HR Lead được chỉnh sửa')
     return roles
 
@@ -129,7 +134,11 @@ def capabilities(user: dict = Depends(get_current_user)):
     db = SessionLocal()
     try:
         roles, assigned = _require_directory(db, user['user_id'])
-        return {'can_create': bool(assigned or roles.intersection({'HR_RECRUITER', 'HR_LEAD'})),
+        # ADMIN không phải vai trò tuyển dụng nhưng quản trị hệ thống, nên phải
+        # hoạch định được thư viện rubric — nếu không thì màn hình hiện "Chưa có
+        # rubric nào" mà không có nút nào tạo được, tính năng chết với ADMIN
+        # (tài khoản dựng hệ thống). `can_publish` vẫn chỉ HR_LEAD.
+        return {'can_create': bool(assigned or roles.intersection({'ADMIN', 'HR_RECRUITER', 'HR_LEAD'})),
                 'can_publish': 'HR_LEAD' in roles, 'user_id': user['user_id']}
     finally:
         db.close()

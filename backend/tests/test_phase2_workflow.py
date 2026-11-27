@@ -367,3 +367,41 @@ def test_hr_can_save_proposed_rubric_as_draft(client, seed):
     assert result['status'] == 'DRAFT' and result['created_by'] == seed['hr'] and len(result['items']) == 5
     assert result['items'][0]['requirement_spec']['min_years'] == 4
     assert client.post('/v1/rubric-library/versions/' + result['template_version_id'] + '/publish', headers=headers(seed['hr']), json={'expected_revision': 1}).status_code == 403
+
+
+def test_admin_can_build_rubric_library_but_not_publish(client, seed):
+    """ADMIN dựng được thư viện rubric nhưng vẫn không xuất bản.
+
+    Lỗi gốc: `capabilities.can_create` và `_require_editor` chỉ tính
+    HR_RECRUITER/HR_LEAD. ADMIN vào thư viện thì thấy "Chưa có rubric nào" mà
+    không có nút nào tạo được — với tài khoản quản trị (người dựng hệ thống)
+    thư viện rỗng vĩnh viễn, tính năng chết. Mọi endpoint phân quyền khác
+    (positions, scorecards, dashboard, shortlist) đều đã tính ADMIN; riêng chỗ
+    này bỏ sót. Xuất bản vẫn là quyền riêng của HR_LEAD.
+    """
+    admin = uid()
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO auth.users(id) VALUES (:id)"), {"id": admin})
+        conn.execute(text("INSERT INTO app_private.user_profiles(user_id, display_name) VALUES (:id, 'ADMIN')"), {"id": admin})
+        conn.execute(text("INSERT INTO app_private.user_role_assignments(user_id, role_code) VALUES (:id, 'ADMIN')"), {"id": admin})
+
+    base = '/v1/rubric-library'
+    caps = client.get(base + '/capabilities', headers=headers(admin))
+    assert caps.status_code == 200, caps.text
+    assert caps.json()['can_create'] is True
+    # Xuất bản là quyền của HR_LEAD, không mở cho ADMIN.
+    assert caps.json()['can_publish'] is False
+
+    families = client.get(base + '/families', headers=headers(admin)).json()
+    item = {'name': 'Synthetic admin', 'description': 'Synthetic test only',
+            'category': 'MUST_HAVE', 'weight_in_group': 100}
+    created = client.post(base + '/templates', headers=headers(admin), json={
+        'job_family_id': families[0]['job_family_id'], 'title': 'Rubric do ADMIN dựng', 'items': [item]})
+    assert created.status_code == 201, created.text
+    version = created.json()['template_version_id']
+    # Sửa được bản nháp mình tạo (owner truyền vào), và không xuất bản được.
+    updated = client.put(base + '/versions/' + version, headers=headers(admin),
+                         json={'expected_revision': 1, 'items': [item]})
+    assert updated.status_code == 200, updated.text
+    assert client.post(base + '/versions/' + version + '/publish', headers=headers(admin),
+                       json={'expected_revision': 2}).status_code == 403

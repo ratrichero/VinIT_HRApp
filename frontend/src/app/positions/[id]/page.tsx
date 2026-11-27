@@ -696,6 +696,18 @@ export default function PositionDetailPage() {
         )}
       </Box>
 
+      {/* Vị trí thiếu Nhóm vị trí: vẫn chạy được bình thường, nhưng HR chỉ phát
+          hiện ra khi vào thư viện rubric và bị từ chối. Nói trước ở đây, kèm
+          đường sửa, thay vì bắt buộc chọn lúc tạo (nhiều vị trí không dùng thư
+          viện, bắt buộc chỉ làm chậm luồng). */}
+      {isHR && !position.job_family_id && (
+        <Alert severity="info" sx={{ mb: 3 }} action={
+          <Button size="small" color="inherit" onClick={openPositionEdit}>{t('Gán nhóm')}</Button>
+        }>
+          {t('Vị trí này chưa có Nhóm vị trí. Không ảnh hưởng chấm điểm hay duyệt tiêu chí, nhưng không dùng được thư viện rubric (thư viện lọc và chặn theo nhóm) và không sinh được rubric từ JD của vị trí này.')}
+        </Alert>
+      )}
+
       {partialError && (
         <Alert severity="warning" sx={{ mb: 3 }} onClose={() => setPartialError(null)}>
           {partialError}
