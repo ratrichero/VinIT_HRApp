@@ -77,13 +77,15 @@ async function installCareersApi(context) {
   await page.getByRole('heading', { name: 'Open positions' }).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en', '<html lang> must follow the switch');
   assert.equal(await page.getByRole('button', { name: 'View Detail' }).count(), 1);
-  assert.match(await page.locator('body').innerText(), /Synthetic CVs and details only/);
+  // Cảnh báo "chỉ dùng dữ liệu tổng hợp" đã bỏ: form nay nhận email thật và
+  // câu đồng ý nói về việc lưu hồ sơ 12 tháng.
+  assert.match(await page.locator('body').innerText(), /Free-form CVs and details only/);
 
   await page.getByRole('button', { name: 'View Detail' }).click();
-  await page.getByLabel('Synthetic name').waitFor();
-  assert.equal(await page.getByLabel('Synthetic email @example.test').count(), 1);
-  assert.equal(await page.getByRole('button', { name: 'Send test application' }).count(), 1);
-  assert.match(await page.locator('body').innerText(), /I separately consent to join the synthetic Talent Pool/);
+  await page.getByLabel('Candidate name').waitFor();
+  assert.equal(await page.getByLabel('Email').count(), 1);
+  assert.equal(await page.getByRole('button', { name: 'Submit application' }).count(), 1);
+  assert.match(await page.locator('body').innerText(), /I agree to submit my application/);
   assert.match(await page.locator('body').innerText(), /No file selected/);
 
   // The demo path relies on this exact name; keep it addressable by name.
@@ -91,7 +93,7 @@ async function installCareersApi(context) {
 
   await page.getByRole('button', { name: 'Tiếng Việt' }).click();
   await page.getByRole('heading', { name: /Nộp hồ sơ cho vị trí này/ }).waitFor();
-  assert.equal(await page.getByLabel('Tên tổng hợp').count(), 1);
+  assert.equal(await page.getByLabel('Tên ứng viên').count(), 1);
   assert.deepEqual(pageErrors, [], `no client-side exceptions: ${pageErrors.join(' | ')}`);
   assert.deepEqual(unexpected, [], `all API calls are accounted for: ${unexpected.join(', ')}`);
   await context.close();
@@ -154,10 +156,10 @@ async function installCareersApi(context) {
     assert.ok(button.right <= geometry.innerWidth + 1, `"${button.label}" must stay on screen`);
   }
 
-  await phone.getByLabel('Tên tổng hợp').fill('Ứng viên tổng hợp');
-  await phone.getByLabel('Email tổng hợp @example.test').fill('ung.vien@example.test');
-  await phone.getByRole('button', { name: 'Gửi hồ sơ thử nghiệm' }).click();
-  await phone.getByText('Đã tiếp nhận yêu cầu thử nghiệm', { exact: false }).waitFor();
+  await phone.getByLabel('Tên ứng viên').fill('Ứng viên tổng hợp');
+  await phone.getByLabel('Email').fill('ung.vien@example.test');
+  await phone.getByRole('button', { name: 'Gửi hồ sơ' }).click();
+  await phone.getByText('Đã tiếp nhận hồ sơ', { exact: false }).waitFor();
 
   assert.equal(applications.length, 1, 'exactly one submission');
   assert.match(applications[0].contentType, /multipart\/form-data/, 'the CV is still posted as a multipart form');

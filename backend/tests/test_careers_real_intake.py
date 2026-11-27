@@ -121,7 +121,10 @@ def test_flags_synthetic_scope_and_receipt_retry_after_storage_failure(client, r
     monkeypatch.setattr(settings, 'PUBLIC_CAREERS_TEST_INTAKE_ENABLED', False)
     assert send(client, seed, content, str(uuid4())).status_code == 404
     monkeypatch.setattr(settings, 'PUBLIC_CAREERS_TEST_INTAKE_ENABLED', True)
-    assert send(client, seed, content, str(uuid4()), email='person@gmail.com').status_code == 400
+    # Trước đây dòng này khẳng định ngược lại (400): form công khai chỉ nhận
+    # `@example.test`. Nay nhận email thật, nên email thật phải đi tiếp được —
+    # còn email hỏng thì vẫn 400 (xem `test_malformed_email_is_still_rejected`).
+    assert send(client, seed, content, str(uuid4()), email='person@gmail.com').status_code == 202
     original = careers_intake._store
     def failed_after_write(*args):
         original(*args)
