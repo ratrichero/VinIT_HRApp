@@ -27,6 +27,21 @@ def seed():
         # Only positions (and dependent data) are truncated; the default scoring policy remains intact.
         conn.execute(text("TRUNCATE app_private.positions CASCADE"))
         conn.execute(text("TRUNCATE app_private.departments CASCADE"))
+        # Cài đặt HR không nằm trong CASCADE của positions, nên nó là trạng thái
+        # bền duy nhất mà test này để lại: `test_hr_settings_round_trip...` PATCH
+        # `deadline_soon_days` thành 14 và không trả về 7, nên lần chạy thứ hai
+        # trên cùng DB thấy `previous_value` = 14 và đỏ — đúng kiểu nhiễm bẩn
+        # không lộ ra khi mỗi lần chạy lại dựng DB mới.
+        #
+        # Đặt lại về giá trị migration 00033 đã seed (7) thay vì TRUNCATE: xoá
+        # trắng bảng thì `load_settings` tự trả mặc định từ code, nên phép kiểm
+        # "mặc định đọc lên từ migration, không phải hằng số trong code" vẫn
+        # xanh nhưng không còn chứng minh điều nó nói. Giữ dòng thì cả hai đúng.
+        conn.execute(text(
+            "INSERT INTO app_private.app_settings (setting_key, value_int, updated_by) VALUES "
+            "('deadline_soon_days', 7, NULL), ('waiting_attention_days', 7, NULL) "
+            "ON CONFLICT (setting_key) DO UPDATE SET value_int = 7, updated_by = NULL, updated_at = now()"
+        ))
         conn.execute(text("INSERT INTO app_private.ai_runtime_controls(service_type, enabled) VALUES ('BGE', false), ('LTR', false) ON CONFLICT (service_type) DO UPDATE SET enabled=false, updated_by=NULL"))
         conn.execute(text("UPDATE app_private.ai_configuration_versions SET status='DISABLED' WHERE status='ACTIVE'"))
         for key in ("hr", "hm", "other", "hr2"):

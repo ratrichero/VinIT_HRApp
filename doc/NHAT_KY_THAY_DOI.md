@@ -9,6 +9,54 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — Nhiễm trạng thái giữa hai lần chạy: `seed` phải đặt lại ngưỡng HR
+
+**Vấn đề.** `test_hr_settings_round_trip_and_reach_the_work_queue` PATCH
+`deadline_soon_days` thành 14 rồi khẳng định `previous_value == 7` và
+"với ngưỡng 7 thì chưa có việc" — nhưng nó **không trả ngưỡng về 7**. Fixture
+`seed` chỉ truncate `app_private.positions` và `departments`; `app_settings` không
+nằm trong CASCADE của bảng nào nên giá trị 14 sống sót sang lần chạy sau trên
+cùng DB. Lần thứ hai đỏ ngay ở `assert deadline_items() == []`, và thông điệp
+không hề nói "DB bẩn" nên rất dễ bị đọc thành lỗi flaky.
+
+Vì sao không ai thấy: mỗi lần chạy thường dựng DB mới (`scripts/test-db.sh` từ
+chối tạo lại DB đã có), còn CI luôn có container trắng. Chỉ khi chạy lại trên
+**cùng** DB — đúng thứ vừa làm được nhờ `scripts/local-pg.sh` — lỗi mới lộ.
+
+**Sửa.** Trong fixture `seed`: đặt lại hai dòng về giá trị migration 00033 đã seed
+(7) bằng upsert `ON CONFLICT ... DO UPDATE SET value_int = 7, updated_by = NULL`.
+Chọn upsert chứ không `TRUNCATE app_private.app_settings`:
+
+* TRUNCATE cũng làm test xanh (vì `load_settings` tự trả mặc định từ code khi bảng
+  rỗng), nhưng khi đó phép kiểm "mặc định đọc lên **từ migration**, không phải
+  hằng số trong code" vẫn xanh mà **không còn chứng minh điều nó nói** — đúng kiểu
+  test yếu đi trong im lặng.
+* Upsert giữ nguyên dòng do migration tạo, chỉ trả giá trị về mặc định, nên cả hai
+  phép kiểm đều đúng nghĩa.
+
+**Kiểm ngược (cùng một DB, cổng 55441).** DB đang ở trạng thái bẩn
+(`deadline_soon_days = 14`):
+
+| Lần chạy | Có dòng đặt lại | Kết quả |
+| --- | --- | --- |
+| 1 | có | **1 passed** |
+| 2 | có | **1 passed** |
+| 1 | gỡ dòng (ngưỡng đặt tay về 7) | 1 passed — và để lại 14 |
+| 2 | gỡ dòng | **1 failed**: `assert ['POSITION_DEADLINE_SOON'] == []` |
+
+Gỡ dòng sửa là đỏ, giữ dòng là xanh — test kiểm đúng thứ nó nói.
+
+**Đã chạy (cùng DB, không dựng lại).** `pytest backend/tests/test_phase1_integration.py`
+**3 lần liên tiếp: 94 passed** mỗi lần (81,9s / 72,6s / 68,8s); sau đó
+`pytest backend/tests -q` = **918 passed**; `ruff --select F` trên file vừa sửa:
+All checks passed. Đọc lại bảng sau khi chạy: cả hai ngưỡng = 7.
+
+**Chưa kiểm.** Mới soát `app_settings`. Chưa rà các bảng khác mà fixture không
+truncate và test có ghi (`ai_runtime_controls` được fixture bật/tắt lại,
+`llm_usage_attempts` được truncate tại chỗ trong một test) — nếu còn bảng nào giữ
+trạng thái thì triệu chứng sẽ y hệt và cách tìm cũng y hệt: chạy hai lần trên cùng
+DB. `scripts/test-db.sh` vẫn in "kỳ vọng 671 passed" (số cũ, thực tế 918).
+
 ## 2026-11-27 — `scripts/local-pg.sh`: dựng PostgreSQL cục bộ bằng một lệnh
 
 **Vấn đề.** Bước dựng PostgreSQL để chạy integration test chỉ nằm trong đầu người
