@@ -2078,5 +2078,13 @@
   "Chờ HR Recruiter xác nhận": "Waiting for HR Recruiter confirmation",
   "Duyệt xong bộ tiêu chí sẽ được khóa để chấm điểm.": "Once approved, the criteria set is locked for scoring.",
   "tổng điểm": "of total score",
-  "Cách nhau bằng dấu phẩy.": "Separate with commas."
+  "Cách nhau bằng dấu phẩy.": "Separate with commas.",
+  "Nội dung đang soạn sẽ bị thay bằng JD của vị trí kia. Tiếp tục?": "The text you are editing will be replaced by the other position's JD. Continue?",
+  "Không lấy được JD từ vị trí đã chọn.": "Could not fetch the JD from the selected position.",
+  "Dùng lại JD của vị trí khác cùng nhóm": "Reuse the JD of another position in the same family",
+  "Vị trí nguồn": "Source position",
+  "Đang lấy…": "Fetching…",
+  "Lấy vào ô soạn thảo": "Copy into the editor",
+  "Đã lấy từ": "Copied from",
+  "Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.": "Fix the position title, headcount and location before saving."
 }

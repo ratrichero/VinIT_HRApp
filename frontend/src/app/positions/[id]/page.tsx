@@ -157,6 +157,23 @@ export default function PositionDetailPage() {
   const [jdVersions, setJdVersions] = useState<JDVersion[]>([]);
   const [selectedJdId, setSelectedJdId] = useState('');
   const [jdDialogOpen, setJdDialogOpen] = useState(false);
+  // "Lấy JD từ vị trí khác": chỉ giữ id vị trí nguồn HR vừa chọn và kết quả trả về
+  // để nhắc họ rà lại. Không giữ nội dung — nội dung đổ thẳng vào ô soạn thảo.
+  const [jdSourceId, setJdSourceId] = useState('');
+  const [jdSourceNote, setJdSourceNote] = useState<string | null>(null);
+  const [loadingJdTemplate, setLoadingJdTemplate] = useState(false);
+  const [jdCandidates, setJdCandidates] = useState<Array<{ position_id: string; position_code: string; title: string }>>([]);
+  /**
+   * Vị trí nguồn để lấy JD: cùng Nhóm vị trí, khác vị trí này.
+   *
+   * Tải lười, chỉ khi mở dialog soạn JD. Trang này chỉ cần một vị trí, nên kéo
+   * cả danh sách vị trí mỗi lần vào trang là trả giá cho một tính năng ít dùng.
+   * Lọc theo nhóm ở đây để HR không phải mở danh sách rồi đoán — máy chủ vẫn
+   * kiểm lại, giao diện không phải chốt chặn.
+   */
+  const jdSourceOptions = jdCandidates
+    .filter(p => p.position_id !== positionId)
+    .map(p => ({ position_id: p.position_id, position_code: p.position_code, title: p.title }));
   const [jdContent, setJdContent] = useState('');
   const [jdExpected, setJdExpected] = useState('');
   const [jdError, setJdError] = useState<string | null>(null);
@@ -503,12 +520,37 @@ export default function PositionDetailPage() {
     } finally { setSavingWeights(false); }
   };
 
+  /**
+   * Lấy JD của vị trí khác cùng nhóm, đổ vào ô soạn thảo.
+   *
+   * Cố ý KHÔNG lưu: JD của vị trí khác còn tên vị trí cũ, số lượng cũ, địa điểm
+   * cũ. Đổ vào ô để HR sửa rồi tự bấm Lưu là cách duy nhất giữ được một bước
+   * người thật rà lại nội dung trước khi nó thành phiên bản chính thức.
+   *
+   * Có nội dung đang soạn dở thì hỏi trước khi ghi đè — thao tác này không lùi
+   * được, và ô JD là chỗ HR có thể đã gõ vài trăm chữ.
+   */
+  const loadJdFromPosition = async () => {
+    if (!jdSourceId || loadingJdTemplate) return;
+    if (jdDirty && !window.confirm(t('Nội dung đang soạn sẽ bị thay bằng JD của vị trí kia. Tiếp tục?'))) return;
+    setLoadingJdTemplate(true); setJdError(null);
+    try {
+      const { data } = await positionsApi.getJdTemplate(positionId, jdSourceId);
+      setJdContent(data.content_text);
+      setJdSourceNote(`${data.source_position_code} · ${data.source_position_title} · v${data.source_version_number}`);
+    } catch (err: any) {
+      setJdSourceNote(null);
+      setJdError(err.response?.data?.detail || t('Không lấy được JD từ vị trí đã chọn.'));
+    } finally { setLoadingJdTemplate(false); }
+  };
+
   const saveJd = async () => {
     if (!jdContent.trim() || !jdExpected || savingJd) return;
     try {
       setSavingJd(true); setJdError(null);
       const response = await positionsApi.createJdVersion(positionId, { content_text: jdContent.trim(), expected_jd_version_id: jdExpected });
       setJdDialogOpen(false); setSelectedJdId(response.data.jd_version_id);
+      setJdSourceId(''); setJdSourceNote(null);
       await loadData();
     } catch (err: any) { setJdError(err.response?.data?.detail || t("Không thể lưu phiên bản JD.")); }
     finally { setSavingJd(false); }
@@ -1123,7 +1165,19 @@ export default function PositionDetailPage() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 2 }}>
             <Typography variant="h4">{t("Mô tả công việc")}</Typography>
             {isHR && <Button variant="outlined" startIcon={<EditOutlinedIcon />} disabled={!latestJd || isOperationRunning}
-              onClick={() => { if (latestJd) { setJdContent(latestJd.content_text); setJdBaseline(latestJd.content_text); setJdExpected(latestJd.jd_version_id); setJdError(null); setJdDialogOpen(true); } }}>{t("Tạo phiên bản JD mới")}</Button>}
+              onClick={() => {
+                if (!latestJd) return;
+                setJdContent(latestJd.content_text); setJdBaseline(latestJd.content_text);
+                setJdExpected(latestJd.jd_version_id); setJdError(null);
+                setJdSourceId(''); setJdSourceNote(null);
+                setJdDialogOpen(true);
+                // Chỉ tải khi có Nhóm vị trí: chưa có thì không có nguồn nào hợp lệ.
+                if (position.job_family_id) {
+                  positionsApi.listAll()
+                    .then(all => setJdCandidates(all.filter((p: any) => p.job_family_id === position.job_family_id)))
+                    .catch(() => setJdCandidates([]));
+                }
+              }}>{t("Tạo phiên bản JD mới")}</Button>}
           </Box>
           {jdVersions.length > 0 ? <>
             <FormControl size="small" sx={{ minWidth: 180, mb: 2 }}><InputLabel id="jd-version-label">{t("Phiên bản JD")}</InputLabel>
@@ -1140,6 +1194,41 @@ export default function PositionDetailPage() {
         <DialogContent>
           <Alert severity="info" sx={{ mt: 1, mb: 2 }}>{t("Phiên bản cũ được giữ lại. Sau khi lưu, cần tạo và duyệt tiêu chí mới trước khi xử lý thêm CV.")}</Alert>
           {jdError && <Alert severity="error" sx={{ mb: 2 }}>{t(jdError)}</Alert>}
+          {/* Lấy JD từ vị trí khác cùng Nhóm vị trí: cùng nhóm thường tuyển nhiều
+              đợt với nội dung gần giống nhau. Đặt NGAY TRÊN ô nội dung vì nó là
+              bước đầu của việc soạn, không phải tuỳ chọn ở cuối form.
+              Nút chỉ hiện khi vị trí này có Nhóm vị trí — chưa có thì không có
+              gì để đối chiếu, và máy chủ cũng sẽ từ chối. */}
+          {position.job_family_id && jdSourceOptions.length > 0 && (
+            <Box sx={{ mb: 2, p: 1.5, border: '1px dashed #C9D6E5', borderRadius: 1, backgroundColor: '#FAFCFF' }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+                {t('Dùng lại JD của vị trí khác cùng nhóm')}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <TextField
+                  select size="small" label={t('Vị trí nguồn')} value={jdSourceId}
+                  onChange={e => setJdSourceId(e.target.value)}
+                  disabled={loadingJdTemplate || savingJd}
+                  sx={{ minWidth: 260, flex: 1 }}
+                >
+                  {jdSourceOptions.map(p => (
+                    <MenuItem key={p.position_id} value={p.position_id}>{p.position_code} · {p.title}</MenuItem>
+                  ))}
+                </TextField>
+                <Button
+                  size="small" variant="outlined" onClick={loadJdFromPosition}
+                  disabled={!jdSourceId || loadingJdTemplate || savingJd}
+                >
+                  {loadingJdTemplate ? t('Đang lấy…') : t('Lấy vào ô soạn thảo')}
+                </Button>
+              </Box>
+              {jdSourceNote && (
+                <Alert severity="info" sx={{ mt: 1, py: 0.25 }}>
+                  {t('Đã lấy từ')} {jdSourceNote}. {t('Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.')}
+                </Alert>
+              )}
+            </Box>
+          )}
           {/* Không còn ô chọn ngôn ngữ: máy chủ tự dò từ nội dung JD. */}
           <TextField label={t("Nội dung JD")} required fullWidth multiline minRows={12} value={jdContent} onChange={e => setJdContent(e.target.value)} inputProps={{ maxLength: 100000 }} />
         </DialogContent>
