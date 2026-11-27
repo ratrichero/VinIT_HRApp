@@ -94,6 +94,12 @@ def test_real_email_domain_is_accepted(client, ready):
             JOIN app_private.application_identities i USING (application_id)
             WHERE r.request_id=:req"""), {'req': req}).scalar_one()
         assert stored == email
+    # Trả 202 nghĩa là đã tạo operation `CV_PROCESSING` cho vị trí. Dọn nó đi,
+    # nếu không mọi test sau trong module này nhận 409 "Vị trí đang xử lý".
+    with engine.begin() as conn:
+        conn.execute(text("""UPDATE app_private.operations SET status='COMPLETED', completed_at=NOW()
+            WHERE position_id=:pos AND capability='CV_PROCESSING'
+              AND status IN ('PENDING','PROCESSING')"""), {'pos': seed['pos']})
 
 
 def test_malformed_email_is_still_rejected(client, ready):
@@ -121,10 +127,15 @@ def test_flags_synthetic_scope_and_receipt_retry_after_storage_failure(client, r
     monkeypatch.setattr(settings, 'PUBLIC_CAREERS_TEST_INTAKE_ENABLED', False)
     assert send(client, seed, content, str(uuid4())).status_code == 404
     monkeypatch.setattr(settings, 'PUBLIC_CAREERS_TEST_INTAKE_ENABLED', True)
-    # Trước đây dòng này khẳng định ngược lại (400): form công khai chỉ nhận
-    # `@example.test`. Nay nhận email thật, nên email thật phải đi tiếp được —
-    # còn email hỏng thì vẫn 400 (xem `test_malformed_email_is_still_rejected`).
-    assert send(client, seed, content, str(uuid4()), email='person@gmail.com').status_code == 202
+    # Trước đây dòng này khẳng định email thật phải bị 400. Hành vi đó đã bỏ;
+    # việc "email thật được nhận" do `test_real_email_domain_is_accepted` khoá.
+    #
+    # KHÔNG kiểm nó ở đây bằng một lần gửi thành công: một lần 202 sẽ tạo
+    # operation `CV_PROCESSING` đang chờ cho vị trí này, và mọi lần gửi sau đó
+    # trong cùng test nhận 409 "Vị trí đang xử lý" — test sẽ đỏ ở chỗ không
+    # liên quan. Email hỏng thì bị chặn trước khi tạo operation, nên kiểm được
+    # an toàn ngay tại đây.
+    assert send(client, seed, content, str(uuid4()), email='khong-phai-email').status_code == 400
     original = careers_intake._store
     def failed_after_write(*args):
         original(*args)
