@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from typing import List, Optional
 from uuid import UUID
+from pydantic import BaseModel
 from app.core.security import get_current_user
 from app.core.exceptions import NotFoundError
 from app.core.permissions import check_position_access, can_update_application_status
@@ -617,6 +618,106 @@ async def create_jd_version(position_id: UUID, request: JDVersionCreate, current
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+class JdTemplateRequest(BaseModel):
+    source_position_id: UUID
+
+
+@router.post("/{position_id}/jd-template")
+async def jd_template_from_position(
+    position_id: UUID,
+    request: JdTemplateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Trả JD của **một vị trí khác** để HR dán vào ô soạn thảo của vị trí này.
+
+    Vì sao cần: cùng một nhóm vị trí thường tuyển nhiều đợt (Backend Python đợt
+    1, đợt 2…). JD gần như giống nhau, nhưng mỗi lần mở vị trí mới HR lại phải
+    tự tìm vị trí cũ, copy nội dung, rồi dán — hoặc tệ hơn là viết lại từ đầu.
+
+    Bốn quyết định, và lý do:
+
+    * **Chỉ ĐỌC.** Không INSERT/UPDATE nào ở đây. Nội dung trả về đi vào ô soạn
+      thảo của giao diện, HR sửa rồi mới bấm Lưu (đường lưu đã có, qua
+      ``POST /{id}/jd-versions``). Nhờ vậy JD luôn được người xem lại trước khi
+      thành phiên bản mới — JD của vị trí khác còn tên vị trí cũ, số lượng cũ,
+      địa điểm cũ.
+
+    * **Chỉ cùng Nhóm vị trí.** Đây là ranh giới nghiệp vụ, không phải bộ lọc
+      tiện tay: "dùng lại JD" chỉ có nghĩa khi hai vị trí là cùng một loại việc.
+      Lấy JD của nhóm khác là bắt đầu từ một văn bản sai chủ đề.
+
+    * **Chỉ cần quyền trên vị trí ĐÍCH.** Người dùng đã được xác nhận đây là
+      chấp nhận được, và nó đúng với bản chất thao tác: JD là văn bản mô tả công
+      việc nội bộ, không phải dữ liệu ứng viên. Nếu đòi quyền trên cả vị trí
+      nguồn thì HR phụ trách vị trí mới sẽ không lấy được JD từ vị trí của đồng
+      nghiệp — tức tính năng mất gần hết công dụng.
+
+    * **Không trả gì ngoài nội dung JD.** Không trả danh sách ứng viên, không
+      trả trạng thái tuyển, không trả người tạo — chỉ thứ cần để dán vào ô.
+    """
+    # Người dùng phải sửa được vị trí đích: sao chép JD là bước đầu của việc
+    # soạn JD cho chính vị trí này.
+    await check_position_access(position_id, current_user, required_roles=["HR_RECRUITER"])
+    if str(request.source_position_id) == str(position_id):
+        raise HTTPException(status_code=400, detail="Vị trí nguồn phải khác vị trí đích")
+
+    db = SessionLocal()
+    try:
+        target = db.execute(text("""
+            SELECT position_id, title, job_family_id FROM app_private.positions
+            WHERE position_id = :id
+        """), {"id": str(position_id)}).mappings().first()
+        if not target:
+            raise NotFoundError("Position")
+        if not target["job_family_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Vị trí này chưa có Nhóm vị trí nên không đối chiếu được với vị trí khác",
+            )
+
+        source = db.execute(text("""
+            SELECT p.position_id, p.position_code, p.title
+            FROM app_private.positions p
+            WHERE p.position_id = :id AND p.job_family_id = :family
+        """), {"id": str(request.source_position_id), "family": str(target["job_family_id"])}).mappings().first()
+        if not source:
+            # Cùng một mã lỗi cho "không tồn tại" và "khác nhóm": nói khác đi sẽ
+            # cho phép dò xem một vị trí có tồn tại hay không, và nó thuộc nhóm nào.
+            raise HTTPException(
+                status_code=404,
+                detail="Không tìm thấy vị trí nguồn trong cùng Nhóm vị trí",
+            )
+
+        latest = db.execute(text("""
+            SELECT jd_version_id, version_number, content_text, created_at
+            FROM app_private.jd_versions WHERE position_id = :id
+            ORDER BY version_number DESC LIMIT 1
+        """), {"id": str(source["position_id"])}).mappings().first()
+        if not latest:
+            raise HTTPException(status_code=404, detail="Vị trí nguồn chưa có mô tả công việc")
+
+        db.execute(text("""
+            INSERT INTO app_private.audit_events (actor_user_id, action_type, object_type, object_id, position_id, outcome, metadata)
+            VALUES (:user_id, 'READ_JD_TEMPLATE', 'POSITION', :position, :position, 'SUCCESS',
+                    jsonb_build_object('source_position_id', CAST(:source AS text),
+                                       'source_jd_version', :version))
+        """), {"user_id": current_user["user_id"], "position": str(position_id),
+               "source": str(source["position_id"]), "version": latest["version_number"]})
+        db.commit()
+
+        return {
+            "source_position_id": str(source["position_id"]),
+            "source_position_code": source["position_code"],
+            "source_position_title": source["title"],
+            "source_version_number": latest["version_number"],
+            "content_text": latest["content_text"],
+            # Giao diện dùng câu này để nhắc HR rà lại trước khi lưu.
+            "note": "Bản sao từ vị trí khác. Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.",
+        }
     finally:
         db.close()
 

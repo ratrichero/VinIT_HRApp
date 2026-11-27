@@ -78,6 +78,13 @@ export const positionsApi = {
   getJdVersions: (id: string) => apiClient.get(`/positions/${id}/jd-versions`),
   // language_code KHÔNG còn gửi lên: máy chủ tự dò ngôn ngữ từ nội dung JD.
   createJdVersion: (id: string, data: { content_text: string; expected_jd_version_id: string }) => apiClient.post(`/positions/${id}/jd-versions`, data),
+  // Lấy JD của một vị trí KHÁC (cùng Nhóm vị trí) để dán vào ô soạn thảo.
+  // Chỉ đọc — không tạo phiên bản JD nào. Người dùng sửa rồi mới bấm Lưu.
+  getJdTemplate: (id: string, sourcePositionId: string) =>
+    apiClient.post<{
+      source_position_id: string; source_position_code: string; source_position_title: string;
+      source_version_number: number; content_text: string; note: string;
+    }>(`/positions/${id}/jd-template`, { source_position_id: sourcePositionId }),
 };
 
 export const departmentsApi = {
@@ -267,7 +274,7 @@ export const adminApi = {
 
 export const interviewsApi = {
   // `mine` cho màn "Lịch của tôi"; thiếu nó thì phải là HR của vị trí.
-  list: (params: { position_id?: string; from_at?: string; to_at?: string; mine?: boolean }) =>
+  list: (params: { position_id?: string; application_id?: string; from_at?: string; to_at?: string; mine?: boolean }) =>
     apiClient.get('/interviews', { params }),
   get: (id: string) => apiClient.get(`/interviews/${id}`),
   create: (data: {

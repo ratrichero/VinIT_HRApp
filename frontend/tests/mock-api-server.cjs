@@ -172,6 +172,15 @@ function routes(path, method) {
   if (path === '/v1/operations/position/p1/active') return null;
   if (path === '/v1/rubric-library/families') return families;
   if (path === '/v1/rubric-library/capabilities') return { user_id: 'u-admin', can_create: true, can_publish: true };
+  // Lấy JD từ vị trí khác: bản giả lập trả nội dung cố định.
+  if (path === '/v1/positions/p1/jd-template') {
+    return {
+      source_position_id: 'p2', source_position_code: 'POS-002',
+      source_position_title: 'Backend Python (đợt trước)', source_version_number: 2,
+      content_text: 'JD mẫu lấy từ vị trí khác. Sửa lại trước khi lưu.',
+      note: 'Bản sao từ vị trí khác.',
+    };
+  }
   // "Suy lại từ tên + mô tả": bản giả lập trả spec cố định. Đủ để thấy nút hoạt
   // động; hình dạng spec thật do backend test riêng.
   if (path === '/v1/rubric-library/preview-spec') {

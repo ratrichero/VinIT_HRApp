@@ -54,7 +54,7 @@ import PositionSummary from '@/components/workflow/PositionSummary';
 import OperationProgressPanel from '@/components/workflow/OperationProgressPanel';
 import InvalidFileList from '@/components/workflow/InvalidFileList';
 import CVIntakePanel from '@/components/positions/CVIntakePanel';
-import { asApiSpec, buildSpec, specProblem, withKind, KIND_LABEL, SPEC_KINDS } from '@/lib/requirementSpec';
+import { asApiSpec, buildSpec, specKindOf, specProblem, withKind, KIND_LABEL, SPEC_KINDS } from '@/lib/requirementSpec';
 import ApplyRubric from '@/components/positions/ApplyRubric';
 import { EMPLOYMENT_TYPES } from '@/lib/employmentTypes';
 import HiringManagerChange from './HiringManagerChange';
@@ -82,12 +82,19 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
+/**
+ * Một dòng tóm tắt "máy sẽ so khớp tiêu chí này thế nào", viết cho HR đọc.
+ *
+ * Trước đây dòng này mở đầu bằng chính mã ``SKILL``/``YEARS`` — đúng thứ mà cả
+ * hai trang vừa bỏ khỏi ô nhập, mang từ backend ra giao diện. Nay dùng nhãn
+ * tiếng Việt chung (``KIND_LABEL``), nên HR đọc được mà không cần biết enum.
+ */
 function requirementSpecSummary(criterion: Criterion, t: (text: string) => string): string {
   const spec = criterion.requirement_spec;
-  if (!spec) return t("Chưa có đặc tả yêu cầu cấu trúc; hệ thống sẽ suy luận bản nháp khi HR duyệt.");
-  const details: string[] = [spec.kind];
-  if (spec.min_years != null) details.push(`≥ ${spec.min_years} ${t("năm")}`);
-  if (spec.required_degree_level != null) details.push(`${t("bậc bằng")} ${spec.required_degree_level}`);
+  if (!spec) return t("Máy đọc tên và mô tả để tự suy ra cách so khớp.");
+  const details: string[] = [t(KIND_LABEL[specKindOf(spec)])];
+  if (spec.min_years != null) details.push(`${t("từ")} ${spec.min_years} ${t("năm")}`);
+  if (spec.required_degree_level != null) details.push(`${t("từ bậc")} ${spec.required_degree_level}`);
   if (spec.required_ielts != null) details.push(`IELTS ${spec.required_ielts}`);
   if (spec.required_toeic != null) details.push(`TOEIC ${spec.required_toeic}`);
   if (spec.required_cefr) details.push(spec.required_cefr);
@@ -150,6 +157,23 @@ export default function PositionDetailPage() {
   const [jdVersions, setJdVersions] = useState<JDVersion[]>([]);
   const [selectedJdId, setSelectedJdId] = useState('');
   const [jdDialogOpen, setJdDialogOpen] = useState(false);
+  // "Lấy JD từ vị trí khác": chỉ giữ id vị trí nguồn HR vừa chọn và kết quả trả về
+  // để nhắc họ rà lại. Không giữ nội dung — nội dung đổ thẳng vào ô soạn thảo.
+  const [jdSourceId, setJdSourceId] = useState('');
+  const [jdSourceNote, setJdSourceNote] = useState<string | null>(null);
+  const [loadingJdTemplate, setLoadingJdTemplate] = useState(false);
+  const [jdCandidates, setJdCandidates] = useState<Array<{ position_id: string; position_code: string; title: string }>>([]);
+  /**
+   * Vị trí nguồn để lấy JD: cùng Nhóm vị trí, khác vị trí này.
+   *
+   * Tải lười, chỉ khi mở dialog soạn JD. Trang này chỉ cần một vị trí, nên kéo
+   * cả danh sách vị trí mỗi lần vào trang là trả giá cho một tính năng ít dùng.
+   * Lọc theo nhóm ở đây để HR không phải mở danh sách rồi đoán — máy chủ vẫn
+   * kiểm lại, giao diện không phải chốt chặn.
+   */
+  const jdSourceOptions = jdCandidates
+    .filter(p => p.position_id !== positionId)
+    .map(p => ({ position_id: p.position_id, position_code: p.position_code, title: p.title }));
   const [jdContent, setJdContent] = useState('');
   const [jdExpected, setJdExpected] = useState('');
   const [jdError, setJdError] = useState<string | null>(null);
@@ -496,12 +520,37 @@ export default function PositionDetailPage() {
     } finally { setSavingWeights(false); }
   };
 
+  /**
+   * Lấy JD của vị trí khác cùng nhóm, đổ vào ô soạn thảo.
+   *
+   * Cố ý KHÔNG lưu: JD của vị trí khác còn tên vị trí cũ, số lượng cũ, địa điểm
+   * cũ. Đổ vào ô để HR sửa rồi tự bấm Lưu là cách duy nhất giữ được một bước
+   * người thật rà lại nội dung trước khi nó thành phiên bản chính thức.
+   *
+   * Có nội dung đang soạn dở thì hỏi trước khi ghi đè — thao tác này không lùi
+   * được, và ô JD là chỗ HR có thể đã gõ vài trăm chữ.
+   */
+  const loadJdFromPosition = async () => {
+    if (!jdSourceId || loadingJdTemplate) return;
+    if (jdDirty && !window.confirm(t('Nội dung đang soạn sẽ bị thay bằng JD của vị trí kia. Tiếp tục?'))) return;
+    setLoadingJdTemplate(true); setJdError(null);
+    try {
+      const { data } = await positionsApi.getJdTemplate(positionId, jdSourceId);
+      setJdContent(data.content_text);
+      setJdSourceNote(`${data.source_position_code} · ${data.source_position_title} · v${data.source_version_number}`);
+    } catch (err: any) {
+      setJdSourceNote(null);
+      setJdError(err.response?.data?.detail || t('Không lấy được JD từ vị trí đã chọn.'));
+    } finally { setLoadingJdTemplate(false); }
+  };
+
   const saveJd = async () => {
     if (!jdContent.trim() || !jdExpected || savingJd) return;
     try {
       setSavingJd(true); setJdError(null);
       const response = await positionsApi.createJdVersion(positionId, { content_text: jdContent.trim(), expected_jd_version_id: jdExpected });
       setJdDialogOpen(false); setSelectedJdId(response.data.jd_version_id);
+      setJdSourceId(''); setJdSourceNote(null);
       await loadData();
     } catch (err: any) { setJdError(err.response?.data?.detail || t("Không thể lưu phiên bản JD.")); }
     finally { setSavingJd(false); }
@@ -526,6 +575,13 @@ export default function PositionDetailPage() {
   const isHR = myPositionRoles.has('HR_RECRUITER') || myPositionRoles.has('HR_LEAD') || mySystemRoles.has('ADMIN') || mySystemRoles.has('HR_LEAD');
   const isHM = myPositionRoles.has('HIRING_MANAGER');
   const canDirectApprove = mySystemRoles.has('ADMIN') || mySystemRoles.has('HR_LEAD') || myPositionRoles.has('HR_LEAD');
+  /**
+   * Bộ tiêu chí đang chờ duyệt (chưa APPROVED).
+   *
+   * Dùng để khỏi nhắc cùng một việc hai lần: khối duyệt ở tab Tiêu chí đã nêu
+   * trạng thái + nút bấm, nên "Hành động tiếp theo" ở khối tổng quan là thừa.
+   */
+  const criteriaAwaitingApproval = !!currentCriteria && currentCriteria.status !== 'APPROVED';
   const isSameApprover = !!currentCriteria?.approved_by_hr && currentCriteria.approved_by_hr === me?.user_id;
   const canEditCriteria = isHR && !!currentCriteria && ['DRAFT', 'PENDING_HR_REVIEW'].includes(currentCriteria.status);
   const criteriaByCategory = (category: Criterion['category']) => currentCriteria?.criteria.filter(item => item.category === category) || [];
@@ -743,9 +799,14 @@ export default function PositionDetailPage() {
             <Divider sx={{ my: 1.5 }} />
             <PositionSummary workspace={workspace} isHR={isHR} />
             <Divider sx={{ my: 1.5 }} />
-            {/* Mỗi hàng một việc: khi số liệu và hành động nằm chung một hàng, nút hành động
-                bị đẩy xuống dưới và lơ lửng giữa thẻ vì khối chứa nó co theo nội dung. */}
-            <NextActionCard workspace={workspace} onAction={handleNextAction} bare />
+            {/* "Hành động tiếp theo" chỉ hiện khi việc kế tiếp KHÔNG phải là duyệt tiêu
+                chí. Lúc bộ tiêu chí còn nháp, khối duyệt ngay dưới đã nói đúng việc đó
+                và có sẵn nút bấm — để cả hai thì cùng một câu xuất hiện hai lần, cách
+                nhau vài chục pixel, kèm hai nút cùng ý nghĩa.
+
+                Mỗi hàng một việc: khi số liệu và hành động nằm chung một hàng, nút hành
+                động bị đẩy xuống dưới và lơ lửng giữa thẻ vì khối chứa nó co theo nội dung. */}
+            {!criteriaAwaitingApproval && <NextActionCard workspace={workspace} onAction={handleNextAction} bare />}
           </CardContent>
         </Card>
       )}
@@ -805,13 +866,6 @@ export default function PositionDetailPage() {
 
       {/* Tab 1: Criteria & Approval */}
       <TabPanel value={activeTab} index={0}>
-        {currentCriteria?.source_template_version_id && <Alert severity="info" sx={{ mb: 2 }}>{t("Nguồn phiên bản rubric")}: {currentCriteria.source_template_version_id}</Alert>}
-        {isHR && currentCriteria?.status === 'DRAFT' && <Alert severity="info" sx={{ mb: 2 }} action={
-          <Button color="inherit" size="small" onClick={() => { setDiscardDraftError(null); setDiscardDraftOpen(true); }}>
-            {t('Huỷ bản nháp này')}
-          </Button>}>
-          {t('Đang là bản nháp. Nếu muốn dùng rubric mẫu có sẵn thay cho bộ AI đề xuất, hãy huỷ bản nháp trước rồi bấm “Dùng rubric đã xuất bản”.')}
-        </Alert>}
         {criteriaStale && <Alert severity="warning" sx={{ mb: 2 }}>{t("JD đã thay đổi. Cần tạo và duyệt bộ tiêu chí cho phiên bản mới trước khi tải hoặc đánh giá CV.")}</Alert>}
         {isHM && isSameApprover && currentCriteria?.status === 'PENDING_HM_APPROVAL' && <Alert severity="warning" sx={{ mb: 2 }}>{t("Hai bước duyệt phải do hai tài khoản khác nhau thực hiện. Vui lòng nhờ Hiring Manager khác được phân công duyệt.")}</Alert>}
         {/* Duyệt tiêu chí — đưa lên đầu tab: trước đây nằm dưới cả danh sách tiêu chí
@@ -822,20 +876,25 @@ export default function PositionDetailPage() {
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5, flex: 1, minWidth: 260 }}>
                 <WarningIcon sx={{ color: '#B54708', mt: 0.25 }} />
                 <Box>
-                  <Typography variant="body1" fontWeight={700} color="#B54708">
-                    {currentCriteria.status === 'DRAFT' && t("Chờ HR Recruiter rà soát tiêu chí")}
-                    {currentCriteria.status === 'PENDING_HR_REVIEW' && t("Chờ HR Recruiter xác nhận quy trình")}
-                    {currentCriteria.status === 'PENDING_HM_APPROVAL' && t("Chờ Hiring Manager duyệt chuyên môn")}
-                    {currentCriteria.status === 'REJECTED' && t("Bộ tiêu chí đã bị từ chối")}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                    {currentCriteria.status === 'PENDING_HM_APPROVAL'
-                      ? t("Sau khi HM duyệt, bộ tiêu chí sẽ được khóa và dùng để đánh giá ứng viên.")
-                      : t("Sau khi HR duyệt, hệ thống sẽ chuyển sang bước phê duyệt của Hiring Manager.")}
-                  </Typography>
-                  <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
-                    {t("Vai trò của bạn:")} {myRoleLabels}
-                  </Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <Typography variant="body1" fontWeight={700} color="#B54708">
+                      {currentCriteria.status === 'DRAFT' && t("Chờ HR Recruiter rà soát")}
+                      {currentCriteria.status === 'PENDING_HR_REVIEW' && t("Chờ HR Recruiter xác nhận")}
+                      {currentCriteria.status === 'PENDING_HM_APPROVAL' && t("Chờ Hiring Manager duyệt")}
+                      {currentCriteria.status === 'REJECTED' && t("Bộ tiêu chí đã bị từ chối")}
+                    </Typography>
+                    <Typography variant="caption" color="text.disabled">
+                      {t("Vai trò của bạn:")} {myRoleLabels}
+                    </Typography>
+                  </Box>
+                  {/* Chỉ giữ một câu cho bước hiện tại. Mô tả quy trình chung ("sau khi
+                      HR duyệt sẽ chuyển sang HM…") HR đã biết, và nó lặp lại ở dòng
+                      trạng thái ngay trên. */}
+                  {currentCriteria.status === 'PENDING_HM_APPROVAL' && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+                      {t("Duyệt xong bộ tiêu chí sẽ được khóa để chấm điểm.")}
+                    </Typography>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -845,6 +904,9 @@ export default function PositionDetailPage() {
                   <>
                     {isHR && (
                       <>
+                        {/* Hai cách bỏ bộ tiêu chí hiện tại, đặt cạnh nhau vì cùng
+                            một quyết định. "Huỷ bản nháp" chỉ có khi còn DRAFT. */}
+                        <Button variant="text" color="inherit" size="small" onClick={() => { setDiscardDraftError(null); setDiscardDraftOpen(true); }} disabled={approving}>{t("Huỷ bản nháp")}</Button>
                         <Button variant="outlined" color="error" onClick={() => { setApprovalComment(''); setApprovalAction('REJECT'); }} disabled={approving}>{t("Từ chối")}</Button>
                         <Button variant="contained" color="secondary" startIcon={<CheckCircleIcon />} onClick={() => handleApprove('APPROVE')} disabled={approving || criteriaStale || !itemWeightsValid}>{t("HR duyệt & gửi HM")}</Button>
                         {canDirectApprove && (
@@ -852,7 +914,7 @@ export default function PositionDetailPage() {
                         )}
                       </>
                     )}
-                    {!isHR && <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center' }}>{t("Chờ HR Recruiter rà soát")}</Typography>}
+
                   </>
                 ) : currentCriteria.status === 'PENDING_HM_APPROVAL' ? (
                   <>
@@ -927,7 +989,7 @@ export default function PositionDetailPage() {
                         mr: 2,
                       }}
                     />
-                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{t("                      Tiêu chí bắt buộc (")}{currentCriteria.mandatory_weight_total}{t("% tổng điểm)")}</Typography>
+                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{`(${currentCriteria.mandatory_weight_total}% ${t("tổng điểm")})`}</Typography>
                   </Box>
                   <Divider sx={{ mb: 2 }} />
                   <List disablePadding>
@@ -961,8 +1023,7 @@ export default function PositionDetailPage() {
                       ))}
                   </List>
                   <Divider sx={{ my: 2 }} />
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                    <Typography variant="body2" color={Math.abs(itemWeightTotals.MUST_HAVE - 100) < 0.005 ? 'text.secondary' : 'error'}>{t("Tổng trong nhóm:")} {formatPercent(itemWeightTotals.MUST_HAVE)}% / 100%</Typography>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
                     {canEditCriteria && <Button size="small" startIcon={<AddIcon />} onClick={() => startAddCriterion('MUST_HAVE')}>{t("Thêm tiêu chí")}</Button>}
                   </Box>
                 </CardContent>
@@ -985,7 +1046,7 @@ export default function PositionDetailPage() {
                         mr: 2,
                       }}
                     />
-                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{t("                      Tiêu chí ưu tiên (")}{currentCriteria.nice_to_have_weight_total}{t("% tổng điểm)")}</Typography>
+                    <Typography variant="h4" sx={{ fontSize: 16, fontWeight: 600 }}>{`(${currentCriteria.nice_to_have_weight_total}% ${t("tổng điểm")})`}</Typography>
                   </Box>
                   <Divider sx={{ mb: 2 }} />
                   <List disablePadding>
@@ -1019,8 +1080,7 @@ export default function PositionDetailPage() {
                       ))}
                   </List>
                   <Divider sx={{ my: 2 }} />
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-                    <Typography variant="body2" color={criteriaByCategory('NICE_TO_HAVE').length === 0 || Math.abs(itemWeightTotals.NICE_TO_HAVE - 100) < 0.005 ? 'text.secondary' : 'error'}>{t("Tổng trong nhóm:")} {formatPercent(itemWeightTotals.NICE_TO_HAVE)}% / 100%</Typography>
+                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
                     {canEditCriteria && <Button size="small" startIcon={<AddIcon />} onClick={() => startAddCriterion('NICE_TO_HAVE')}>{t("Thêm tiêu chí")}</Button>}
                   </Box>
                 </CardContent>
@@ -1105,7 +1165,19 @@ export default function PositionDetailPage() {
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 2 }}>
             <Typography variant="h4">{t("Mô tả công việc")}</Typography>
             {isHR && <Button variant="outlined" startIcon={<EditOutlinedIcon />} disabled={!latestJd || isOperationRunning}
-              onClick={() => { if (latestJd) { setJdContent(latestJd.content_text); setJdBaseline(latestJd.content_text); setJdExpected(latestJd.jd_version_id); setJdError(null); setJdDialogOpen(true); } }}>{t("Tạo phiên bản JD mới")}</Button>}
+              onClick={() => {
+                if (!latestJd) return;
+                setJdContent(latestJd.content_text); setJdBaseline(latestJd.content_text);
+                setJdExpected(latestJd.jd_version_id); setJdError(null);
+                setJdSourceId(''); setJdSourceNote(null);
+                setJdDialogOpen(true);
+                // Chỉ tải khi có Nhóm vị trí: chưa có thì không có nguồn nào hợp lệ.
+                if (position.job_family_id) {
+                  positionsApi.listAll()
+                    .then(all => setJdCandidates(all.filter((p: any) => p.job_family_id === position.job_family_id)))
+                    .catch(() => setJdCandidates([]));
+                }
+              }}>{t("Tạo phiên bản JD mới")}</Button>}
           </Box>
           {jdVersions.length > 0 ? <>
             <FormControl size="small" sx={{ minWidth: 180, mb: 2 }}><InputLabel id="jd-version-label">{t("Phiên bản JD")}</InputLabel>
@@ -1122,6 +1194,41 @@ export default function PositionDetailPage() {
         <DialogContent>
           <Alert severity="info" sx={{ mt: 1, mb: 2 }}>{t("Phiên bản cũ được giữ lại. Sau khi lưu, cần tạo và duyệt tiêu chí mới trước khi xử lý thêm CV.")}</Alert>
           {jdError && <Alert severity="error" sx={{ mb: 2 }}>{t(jdError)}</Alert>}
+          {/* Lấy JD từ vị trí khác cùng Nhóm vị trí: cùng nhóm thường tuyển nhiều
+              đợt với nội dung gần giống nhau. Đặt NGAY TRÊN ô nội dung vì nó là
+              bước đầu của việc soạn, không phải tuỳ chọn ở cuối form.
+              Nút chỉ hiện khi vị trí này có Nhóm vị trí — chưa có thì không có
+              gì để đối chiếu, và máy chủ cũng sẽ từ chối. */}
+          {position.job_family_id && jdSourceOptions.length > 0 && (
+            <Box sx={{ mb: 2, p: 1.5, border: '1px dashed #C9D6E5', borderRadius: 1, backgroundColor: '#FAFCFF' }}>
+              <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
+                {t('Dùng lại JD của vị trí khác cùng nhóm')}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <TextField
+                  select size="small" label={t('Vị trí nguồn')} value={jdSourceId}
+                  onChange={e => setJdSourceId(e.target.value)}
+                  disabled={loadingJdTemplate || savingJd}
+                  sx={{ minWidth: 260, flex: 1 }}
+                >
+                  {jdSourceOptions.map(p => (
+                    <MenuItem key={p.position_id} value={p.position_id}>{p.position_code} · {p.title}</MenuItem>
+                  ))}
+                </TextField>
+                <Button
+                  size="small" variant="outlined" onClick={loadJdFromPosition}
+                  disabled={!jdSourceId || loadingJdTemplate || savingJd}
+                >
+                  {loadingJdTemplate ? t('Đang lấy…') : t('Lấy vào ô soạn thảo')}
+                </Button>
+              </Box>
+              {jdSourceNote && (
+                <Alert severity="info" sx={{ mt: 1, py: 0.25 }}>
+                  {t('Đã lấy từ')} {jdSourceNote}. {t('Sửa lại tên vị trí, số lượng và địa điểm trước khi lưu.')}
+                </Alert>
+              )}
+            </Box>
+          )}
           {/* Không còn ô chọn ngôn ngữ: máy chủ tự dò từ nội dung JD. */}
           <TextField label={t("Nội dung JD")} required fullWidth multiline minRows={12} value={jdContent} onChange={e => setJdContent(e.target.value)} inputProps={{ maxLength: 100000 }} />
         </DialogContent>
@@ -1227,14 +1334,16 @@ export default function PositionDetailPage() {
               onChange={e => setEditingCriterion({ ...editingCriterion, weight_in_group: Number(e.target.value) })}
               inputProps={{ min: 0, max: 100, step: 0.1 }} helperText={t("Tổng các tiêu chí trong cùng nhóm phải bằng 100%. Dùng Điều chỉnh trọng số tiêu chí để cân lại toàn nhóm.")} />
             <FormControl fullWidth>
-              <InputLabel id="requirement-kind-label">{t("Loại yêu cầu")}</InputLabel>
-              <Select labelId="requirement-kind-label" label={t("Loại yêu cầu")}
+              <InputLabel id="requirement-kind-label">{t("Cách máy so khớp")}</InputLabel>
+              <Select labelId="requirement-kind-label" label={t("Cách máy so khớp")}
                 value={editingCriterion.requirement_spec?.kind || 'SKILL'}
                 onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: asApiSpec(withKind(editingCriterion.requirement_spec, e.target.value as RequirementSpec['kind'])) })}>
                 {SPEC_KINDS.map(k => <MenuItem key={k} value={k}>{t(KIND_LABEL[k])}</MenuItem>)}
               </Select>
             </FormControl>
-            <TextField label={t("Thuật ngữ bằng chứng (phân tách bằng dấu phẩy)")} fullWidth
+            <TextField label={t("Từ khoá bằng chứng")} fullWidth
+              placeholder={t("Python, FastAPI, PostgreSQL")}
+              helperText={t("Cách nhau bằng dấu phẩy.")}
               value={(editingCriterion.requirement_spec?.terms || []).join(', ')}
               onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...(editingCriterion.requirement_spec || { kind: 'SKILL', required_languages: [] }), terms: e.target.value.split(',').map(item => item.trim()).filter(Boolean), required_languages: editingCriterion.requirement_spec?.required_languages || [] } })} />
             {editingCriterion.requirement_spec?.kind === 'YEARS' && (
@@ -1248,8 +1357,9 @@ export default function PositionDetailPage() {
                 inputProps={{ min: 1, max: 5, step: 1 }} />
             )}
             {editingCriterion.requirement_spec?.kind === 'LANGUAGE' && (<>
-              <TextField label={t("Ngôn ngữ (phân tách bằng dấu phẩy)")} fullWidth
+              <TextField label={t("Ngôn ngữ")} fullWidth
                 value={(editingCriterion.requirement_spec.required_languages || []).join(', ')}
+                placeholder={t("Tiếng Anh, Tiếng Nhật")}
                 onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...editingCriterion.requirement_spec!, required_languages: e.target.value.split(',').map(item => item.trim()).filter(Boolean) } })} />
               <TextField label="IELTS" type="number" fullWidth value={editingCriterion.requirement_spec.required_ielts ?? ''}
                 onChange={e => setEditingCriterion({ ...editingCriterion, requirement_spec: { ...editingCriterion.requirement_spec!, required_ielts: e.target.value === '' ? null : Number(e.target.value) } })}

@@ -219,6 +219,16 @@ export interface Criterion {
   weight_in_group: number;
   expected_evidence_keywords: string[];
   requirement_spec?: RequirementSpec | null;
+  /**
+   * Tiêu chí đã chọn loại nhưng **chưa có ngưỡng** (bậc bằng, số năm, mức ngoại
+   * ngữ). Khi bật, `requirement_spec` đi kèm đã được máy chủ điền một giá trị
+   * hợp lệ để hiển thị được — nhưng giá trị đó *chưa phải quyết định của ai*.
+   *
+   * Vì sao cần cờ riêng: trước đây máy chủ bỏ hẳn spec khi thiếu ngưỡng, nên
+   * giao diện đọc `kind` ra `SKILL` và **giấu mất ô "Bậc bằng tối thiểu"** —
+   * đúng ô cần điền lại không hiện ra.
+   */
+  threshold_pending?: boolean;
   evidence_guidance?: string;
   jd_reference_text?: string;
   display_order: number;

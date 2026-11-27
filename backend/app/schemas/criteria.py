@@ -91,6 +91,16 @@ class Criterion(CriterionBase, TimestampMixin):
     criterion_id: UUID
     criteria_version_id: UUID
     display_order: int
+    #: Tiêu chí đã chọn loại nhưng **chưa có ngưỡng** (bậc bằng, số năm, mức
+    #: ngoại ngữ). Đây là trạng thái hợp lệ của quy trình: HR chọn loại trước,
+    #: điền ngưỡng sau. Trường này tồn tại để giao diện vẫn vẽ được ô ngưỡng và
+    #: biết nó đang trống — thay vì nhận ``requirement_spec = null`` rồi đoán ra
+    #: SKILL và **giấu mất ô cần điền**.
+    #:
+    #: ``requirement_spec`` đi kèm vẫn phải qua được schema (tức đã có ngưỡng
+    #: hoặc đủ thuật ngữ), nên khi cờ này bật, spec trả về là bản đã điền sẵn
+    #: giá trị hợp lệ để giao diện hiển thị; giá trị thật vẫn là "chưa có".
+    threshold_pending: bool = False
 
 
 class CriteriaVersionBase(BaseSchema):
