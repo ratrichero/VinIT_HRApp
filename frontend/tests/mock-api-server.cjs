@@ -21,6 +21,23 @@ const {
 
 const PORT = Number(process.argv[2] || process.env.MOCK_API_PORT || 8000);
 
+// Lịch phỏng vấn mẫu — hai hồ sơ KHÁC nhau, có chủ ý: nếu client lọc sai hoặc
+// tải hết rồi lọc, panel của hồ sơ này sẽ hiện buổi của hồ sơ kia.
+const INTERVIEWS = [
+  {
+    interview_id: 'iv-1', application_id: 'app-1', candidate_name: 'Nguyễn Minh Anh',
+    round_number: 1, starts_at: '2026-11-10T02:00:00Z', ends_at: '2026-11-10T03:00:00Z',
+    location_kind: 'ONLINE', location_text: 'Google Meet',
+    interview_status: 'SCHEDULED', participants: [],
+  },
+  {
+    interview_id: 'iv-2', application_id: 'app-2', candidate_name: 'Trần Bảo',
+    round_number: 2, starts_at: '2026-11-12T02:00:00Z', ends_at: '2026-11-12T03:00:00Z',
+    location_kind: 'ONSITE', location_text: 'Phòng 3A',
+    interview_status: 'SCHEDULED', participants: [],
+  },
+];
+
 const position = {
   ...POSITION,
   job_family_id: 'f1',
@@ -156,7 +173,7 @@ const families = [
   { job_family_id: 'f2', code: 'ADMIN_OPERATIONS', name: 'Vận hành & Hành chính' },
 ];
 
-function routes(path, method) {
+function routes(path, method, url) {
   if (path === '/v1/auth/me') return me;
   if (path === '/v1/positions/p1') return position;
   if (path === '/v1/positions/p1/jd-versions') return [jdV1];
@@ -198,6 +215,13 @@ function routes(path, method) {
   if (path === '/v1/shortlist/shared-with-me') return [];
   if (path === '/v1/scorecards/reminders') return [];
   if (path === '/v1/applications') return applications;
+  if (path === '/v1/interviews') {
+    // Máy chủ lọc, không phải client. `application_id` là đường vào của màn hồ sơ.
+    const applicationId = url.searchParams.get('application_id');
+    return applicationId
+      ? INTERVIEWS.filter(item => item.application_id === applicationId)
+      : INTERVIEWS;
+  }
   if (path === '/v1/assessments/ranking/latest/p1') return ranking;
   if (method === 'POST' || method === 'PATCH' || method === 'PUT') return { ok: true };
   return {};
@@ -205,7 +229,7 @@ function routes(path, method) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
-  const body = JSON.stringify(routes(url.pathname, req.method));
+  const body = JSON.stringify(routes(url.pathname, req.method, url));
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
   res.end(body);
 });
