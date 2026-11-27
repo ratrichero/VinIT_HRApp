@@ -49,6 +49,17 @@ Cùng lỗi ở `_require_editor` (`:92`): dù có sửa `can_create`, POST vẫ
 riêng của Trưởng nhóm HR, đúng thiết kế trong `doc/HUONG_DAN_RUBRIC.md:199` và
 `doc/PHASE2_IMPLEMENTATION_PLAN.md:234`.
 
+> ### Sửa lại lần hai (`a4745f7`) — quyết định trên là sai
+>
+> Giữ `can_publish` chỉ cho `HR_LEAD` tạo ra đúng một nửa lỗi: **ADMIN tạo được bản nháp
+> rồi không bao giờ xuất bản được chính nó**, mà người tạo rubric ít ai là HR_LEAD. Lúc
+> báo lỗi, anh gặp đúng tình huống này.
+>
+> Nay `can_publish` = `{ADMIN, HR_LEAD}`, khớp với mọi chốt phân quyền khác trong hệ
+> thống. `HR_RECRUITER` vẫn 403. Hai biểu thức (`capabilities` và endpoint `publish`) phải
+> khớp **tuyệt đối** — lệch nhau thì giao diện hiện nút rồi bấm vào 403; có test riêng
+> khoá sự khớp này vì chúng nằm cách nhau gần 100 dòng.
+
 ### 2. Không có rubric mồi nào — **đúng thiết kế, không sửa**
 
 Kiểm DB thật:
