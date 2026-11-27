@@ -128,7 +128,7 @@ def _actor_position_access(db, actor: str, application_id: str) -> tuple[dict, b
     ở đây cần biết cả hai trạng thái để xử lý người tham gia (observer/HM chỉ xem).
     """
     row = db.execute(text("""
-        SELECT a.application_id, a.position_id, a.status AS application_status
+        SELECT a.application_id, a.position_id, a.application_status
         FROM app_private.applications a WHERE a.application_id = :app
     """), {"app": application_id}).mappings().first()
     if not row:
@@ -268,7 +268,7 @@ def _conflicting_interviews(db, *, user_ids: list[str], starts_at, ends_at,
 # ---------------------------------------------------------------------------
 
 _INTERVIEW_SELECT = """
-    SELECT i.*, a.position_id, a.status AS application_status,
+    SELECT i.*, a.position_id, a.application_status,
            p.position_code, p.title AS position_title,
            ai.display_name AS candidate_name,
            (SELECT count(*) FROM app_private.interview_participants ip
@@ -822,7 +822,7 @@ def create_scorecards(interview_id: UUID, user: dict = Depends(get_current_user)
         _require_active(db, actor)
         row = db.execute(text("""
             SELECT i.interview_id, i.status, i.application_id, a.position_id,
-                   a.status AS application_status
+                   a.application_status
             FROM app_private.interviews i
             JOIN app_private.applications a ON a.application_id = i.application_id
             WHERE i.interview_id = :id FOR UPDATE OF i

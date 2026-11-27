@@ -9,6 +9,62 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — Quyền `GET /interviews`: test mức DB, và một lỗi 500 lộ ra theo
+
+**Vấn đề.** Audit `doc/AUDIT_2026-11-27_NANG_CAP_GAN_DAY.md` mục 1 tìm ra `GET
+/interviews` không tham số trả lịch của **mọi** vị trí kèm tên ứng viên. Arena đã vá
+trong `eb48521` (403 khi không có `position_id`/`application_id`/`mine`; thêm đường
+`application_id`; `InterviewPanel` gọi theo hồ sơ). Nhưng bộ test đi kèm dùng DB giả
+nên chỉ kiểm **quyết định**, và không có test nào chứng minh `mine=true` trả đúng
+buổi của mình.
+
+**Sửa.** Thêm `backend/tests/test_interviews_list_permissions_db.py` — 5 test chạy
+trên PostgreSQL thật, tự dựng hai buổi của hai người phỏng vấn khác nhau:
+
+| Test | Khoá điều gì |
+| --- | --- |
+| `test_bare_list_is_forbidden_for_an_interviewer` | người phỏng vấn gọi không tham số → 403, thân lỗi không có tên ứng viên |
+| `test_mine_true_returns_only_my_own_sessions` | `mine=true` → 200, đúng 1 buổi của mình, không có buổi của người kia |
+| `test_hr_still_sees_the_whole_position_calendar` | đối chứng: HR của vị trí thấy cả hai buổi (để 403 trên không phải vì chặn tất cả) |
+| `test_application_scoped_list_returns_only_that_application` | lọc theo hồ sơ trả đúng buổi của hồ sơ đó |
+| `test_application_scoped_list_is_forbidden_for_an_interviewer` | người phỏng vấn không phải HR của vị trí → 403 |
+
+**Lỗi thật lộ ra khi viết test.** `_INTERVIEW_SELECT` và hai câu khác trong
+`backend/app/api/interviews.py` đọc `a.status`, nhưng `app_private.applications` chỉ
+có `a.application_status` (từ commit arena `f835e5a`). Trên DB thật, **mọi** đường
+đọc lịch phỏng vấn — list, chi tiết một buổi, và màn scorecard — ném
+`UndefinedColumn` → 500. Không test nào bắt được vì tất cả dùng DB giả; đường 403
+còn che mất lỗi vì nó chặn trước câu SELECT. Sửa cả ba chỗ thành
+`a.application_status`.
+
+**Kiểm ngược.** Đổi chốt 403 thành `if False and ...` rồi chạy lại: đúng 1 test đỏ
+(`test_bare_list_is_forbidden_for_an_interviewer`), 4 test còn lại vẫn xanh — tức
+phép kiểm bám đúng chốt chặn, không xanh nhờ may. Đã phục hồi mã.
+
+**Đo lại `profile-transition-requests`** (server 3000, mock API, build hiện tại):
+
+| Lần chuyển | `totalGet` | `paths` |
+| --- | --- | --- |
+| 1 | 2 | `/v1/interviews` 1, `/v1/applications/app-2` 1 |
+| 2 | 2 | `/v1/interviews` 1, `/v1/applications/app-8` 1 |
+| 3 | 1 | `/v1/interviews` 1 |
+
+URL thật ghi được: `?application_id=app-5` khi mở hồ sơ, `?application_id=app-0` sau
+khi bấm `n`. Nói thẳng: **số request không giảm** (vẫn 1 `GET /v1/interviews` mỗi lần
+chuyển, như trước khi vá) — cái đổi là **phạm vi**: trước là `list({})` kéo tới 200
+buổi của mọi vị trí rồi lọc ở client, nay máy chủ lọc theo hồ sơ và trả vài dòng. Hai
+request `/v1/applications/app-N` còn lại là tải trước hồ sơ **sau nữa** trong hàng đợi
+(script cho phép, và nó không phải chi tiết của hồ sơ đích).
+
+**Đã chạy.** `pytest backend/tests -q` trên PostgreSQL cục bộ dựng lại từ
+`scripts/test-db.sh`: **918 passed, 0 skipped** (913 trước + 5 test mới). 5 file test
+liên quan phỏng vấn: 83 passed. Đo `profile-transition-requests`: pass toàn bộ
+assertion.
+
+**Chưa kiểm.** Chưa chạy e2e nào khác ngoài script đo trên; chưa thử ba endpoint vừa
+sửa cột bằng tay trên giao diện (mới kiểm qua test HTTP + DB thật). PostgreSQL dùng
+để đo là bản 16.2 của bundle `pgserver`, CI dùng 17.
+
 ## 2026-11-27 — Vá mock của 5 test arena làm đỏ: 18 → 13 test đỏ
 
 **Vấn đề.** Mục trước đo được 5 test pass trước merge mà đỏ sau merge, tất cả vì mock **riêng của
