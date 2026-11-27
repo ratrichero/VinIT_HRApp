@@ -344,3 +344,47 @@ def test_explicit_requirement_spec_overrides_text_inference():
     assert spec.kind == "YEARS"
     assert spec.min_years == 5
     assert [term.label for term in spec.terms] == ["python"]
+
+
+def test_vietnamese_degree_phrasings_are_recognised_as_degree_criteria():
+    """Cách người Việt viết yêu cầu học vấn phải về kind=DEGREE.
+
+    Trước đây DEGREE_PATTERNS chỉ có "cu nhan"/"bachelor", nên "Tốt nghiệp đại
+    học" và "Đại học trở lên" rơi về SKILL: máy đi dò từ khoá thay vì so bậc
+    bằng, và HR không thấy ô "Bậc bằng tối thiểu" để điền. Bốn câu dưới là bốn
+    cách viết gặp nhiều nhất trong JD tiếng Việt.
+    """
+    cases = {
+        "Tốt nghiệp đại học chuyên ngành CNTT trở lên.": 3,
+        "Tốt nghiệp đại học.": 3,
+        "Đại học trở lên chuyên ngành CNTT": 3,
+        "Bằng cao đẳng trở lên": 2,
+        "Tốt nghiệp THPT": 1,
+    }
+    for description, expected_level in cases.items():
+        spec = deterministic_matcher.build_requirement_spec(
+            criterion("d", "Học vấn", description))
+        assert spec.kind == "DEGREE", f"{description!r} → {spec.kind}"
+        assert spec.required_degree_level == expected_level, description
+
+
+def test_degree_criterion_without_a_level_leaves_level_empty():
+    """Nêu học vấn mà không nêu bậc thì để trống, KHÔNG đoán.
+
+    Đoán một bậc là gán ngưỡng chưa ai duyệt, và ngưỡng đó đi thẳng vào điểm
+    số. Để trống thì HR thấy ô "Bậc bằng tối thiểu" và tự quyết.
+    """
+    spec = deterministic_matcher.build_requirement_spec(
+        criterion("d", "Học vấn", "Có bằng cấp liên quan tới vị trí"))
+    assert spec.kind == "DEGREE"
+    assert spec.required_degree_level is None
+
+
+def test_degree_wording_does_not_swallow_years_or_skill_criteria():
+    """Mở rộng nhận diện học vấn không được kéo nhầm tiêu chí khác."""
+    years = deterministic_matcher.build_requirement_spec(
+        criterion("y", "Kinh nghiệm", "Ít nhất 3 năm kinh nghiệm Python"))
+    skill = deterministic_matcher.build_requirement_spec(
+        criterion("s", "Kỹ năng", "Thành thạo Python và FastAPI"))
+    assert (years.kind, years.min_years) == ("YEARS", 3.0)
+    assert skill.kind == "SKILL"

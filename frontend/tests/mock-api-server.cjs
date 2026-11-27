@@ -172,6 +172,18 @@ function routes(path, method) {
   if (path === '/v1/operations/position/p1/active') return null;
   if (path === '/v1/rubric-library/families') return families;
   if (path === '/v1/rubric-library/capabilities') return { user_id: 'u-admin', can_create: true, can_publish: true };
+  // "Suy lại từ tên + mô tả": bản giả lập trả spec cố định. Đủ để thấy nút hoạt
+  // động; hình dạng spec thật do backend test riêng.
+  if (path === '/v1/rubric-library/preview-spec') {
+    return {
+      requirement_spec: {
+        kind: 'YEARS', terms: ['python', 'fastapi'], min_years: 3,
+        required_degree_level: null, required_languages: [],
+        required_ielts: null, required_toeic: null, required_cefr: null,
+        required_language_rank: null,
+      },
+    };
+  }
   if (path === '/v1/rubric-library/templates') return rubricTemplates;
   if (path.startsWith('/v1/rubric-library/versions/')) return rubricTemplates[0];
   if (path === '/v1/shortlist/shared-with-me') return [];

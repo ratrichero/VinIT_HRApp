@@ -2,12 +2,12 @@
 
 import { useState } from 'react';
 import {
-  Box, Button, Checkbox, Chip, Collapse, Divider, FormControlLabel, IconButton, MenuItem,
-  Stack, TextField, Tooltip, Typography,
+  Alert, Box, Button, Chip, Collapse, Divider, IconButton, MenuItem, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/i18n/I18nProvider';
+import { rubricApi } from '@/lib/api';
 
 export type RubricItem = {
   name: string;
@@ -28,15 +28,13 @@ export const CATEGORY_STYLE = {
 /**
  * Loại tiêu chí — chính là ``requirement_spec.kind`` bên backend.
  *
- * Đây là thứ duy nhất trong ``requirement_spec`` mà HR cần chọn, vì nó quyết
- * định máy so kiểu gì: đếm số năm, so bằng cấp, đối chiếu ngoại ngữ, hay dò
- * thuật ngữ. Các trường còn lại (``terms``, ``min_years``, …) máy tự suy ra từ
- * tên + mô tả + từ khoá, nên không đưa ra cho HR sửa.
+ * Đây là thứ duy nhất HR cần *chọn*. Ngưỡng đi kèm (số năm, bậc bằng, mức
+ * ngoại ngữ) thì HR chỉ *sửa lại* giá trị máy đã suy ra — cùng cách trang chi
+ * tiết vị trí đang làm, để hai trang không dạy HR hai kiểu khác nhau.
  */
 const SPEC_KINDS = ['SKILL', 'YEARS', 'DEGREE', 'CERTIFICATION', 'LANGUAGE'] as const;
 type SpecKind = (typeof SPEC_KINDS)[number];
 
-/** Nhãn người đọc được cho từng loại. Không hiện mã ``SKILL``/``YEARS`` ra. */
 const KIND_LABEL: Record<SpecKind, string> = {
   SKILL: 'Kỹ năng hoặc công nghệ',
   YEARS: 'Số năm kinh nghiệm',
@@ -45,27 +43,63 @@ const KIND_LABEL: Record<SpecKind, string> = {
   LANGUAGE: 'Ngoại ngữ',
 };
 
-/**
- * ``requirement_spec`` lưu dạng JSONB tự do. Form này chỉ sửa ``kind`` và giữ
- * nguyên phần còn lại, nên phải đọc được cả spec do AI sinh, spec cũ nhiều
- * khoá, và spec hỏng — không được để một khoá lạ làm trắng cả form.
- */
+/** Đọc ``kind`` từ spec dạng JSONB tự do; spec hỏng thì coi như SKILL. */
 function specKindOf(spec: Record<string, unknown> | null): SpecKind {
   const raw = typeof spec?.kind === 'string' ? spec.kind.toUpperCase() : '';
   return (SPEC_KINDS as readonly string[]).includes(raw) ? (raw as SpecKind) : 'SKILL';
 }
 
+function numberOf(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+}
+
+/**
+ * Dựng spec gửi lên máy chủ từ thứ HR nhìn thấy.
+ *
+ * Vì sao phải dựng chứ không gửi nguyên ``item.requirement_spec``: khi HR vừa
+ * bấm chọn loại trên một tiêu chí chưa có spec, object chỉ có ``{kind}`` —
+ * schema từ chối spec không nói được gì (xem ``RequirementSpec.
+ * reject_completely_empty_spec``). Nên luôn kèm ``terms`` lấy từ từ khoá, hoặc
+ * từ tên tiêu chí nếu chưa có từ khoá nào.
+ */
+export function buildSpec(item: RubricItem, keywords: string): Record<string, unknown> | null {
+  const base = item.requirement_spec && typeof item.requirement_spec === 'object' ? item.requirement_spec : null;
+  const kind = specKindOf(base);
+  const terms = keywords.split(',').map(k => k.trim()).filter(Boolean);
+  const effectiveTerms = terms.length > 0 ? terms : (item.name.trim() ? [item.name.trim()] : []);
+
+  // Chưa có spec và cũng không có gì để dò: gửi null để máy tự suy từ chữ,
+  // thay vì gửi một spec rỗng mà schema sẽ từ chối.
+  if (!base && effectiveTerms.length === 0) return null;
+  if (!base) return { kind, terms: effectiveTerms };
+
+  const spec: Record<string, unknown> = { ...base, kind };
+  // ``terms`` trong spec là thứ máy thực sự dò. Giữ đồng bộ với ô từ khoá để
+  // HR không phải sửa hai nơi cho cùng một danh sách.
+  spec.terms = effectiveTerms;
+  if (kind !== 'YEARS') spec.min_years = null;
+  if (kind !== 'DEGREE') spec.required_degree_level = null;
+  if (kind !== 'LANGUAGE') {
+    spec.required_languages = [];
+    spec.required_ielts = null;
+    spec.required_toeic = null;
+    spec.required_cefr = null;
+    spec.required_language_rank = null;
+  }
+  return spec;
+}
+
 /**
  * Một tiêu chí trong cột của nó.
  *
- * Nguyên tắc hiển thị: **HR chỉ thấy thứ HR hiểu.** Ba trường máy tự suy ra
- * (``requirement_spec`` phần chi tiết, trọng số đã tính, từ khoá đã tách) không
- * bày ra thành ô nhập; chúng nằm trong khối "Tuỳ chọn nâng cao" đóng sẵn.
+ * Nguyên tắc hiển thị: **HR chỉ thấy thứ HR hiểu.**
  *
- * Trước đây ô ``Requirement spec (JSON)`` bắt HR gõ JSON tay. Backend suy spec
- * từ tên + mô tả + từ khoá, nên bắt gõ JSON là vừa thừa vừa nguy hiểm: gõ sai
- * một dấu phẩy là không lưu được, mà gõ đúng thì cũng chỉ lặp lại thứ máy đã
- * suy ra.
+ * * ``requirement_spec`` không còn là ô JSON. HR chọn *loại* bằng nhãn đọc
+ *   được, và chỉ khi loại đó cần ngưỡng thì ô ngưỡng mới hiện ra — kèm sẵn giá
+ *   trị máy đã suy ra từ tên + mô tả, để HR sửa chứ không phải nghĩ.
+ * * ``evidence_guidance`` thu vào "Tuỳ chọn nâng cao" đóng sẵn: engine chấm
+ *   điểm không đọc trường này, nó chỉ hiện ở trang bằng chứng để người đọc biết
+ *   cần tìm gì.
  */
 export default function RubricItemEditor({
   item,
@@ -88,13 +122,82 @@ export default function RubricItemEditor({
 }) {
   const { t } = useI18n();
   const [advanced, setAdvanced] = useState(false);
-  const kind = specKindOf(item.requirement_spec);
+  const [resyncing, setResyncing] = useState(false);
+  const [resyncError, setResyncError] = useState('');
+  const spec = item.requirement_spec && typeof item.requirement_spec === 'object' ? item.requirement_spec : null;
+  const kind = specKindOf(spec);
   const keywordList = keywords.split(',').map(k => k.trim()).filter(Boolean);
 
-  /** Đổi loại tiêu chí: giữ nguyên mọi khoá khác trong spec. */
-  const changeKind = (next: SpecKind) => {
-    const base = item.requirement_spec && typeof item.requirement_spec === 'object' ? item.requirement_spec : {};
-    onChange({ requirement_spec: { ...base, kind: next } });
+  /** Đổi một khoá trong spec, giữ nguyên phần còn lại. */
+  const patchSpec = (patch: Record<string, unknown>) => {
+    onChange({ requirement_spec: { ...(spec || {}), ...patch } });
+  };
+
+  /**
+   * Hỏi máy xem nó sẽ so khớp tiêu chí này theo cách nào, rồi áp vào form.
+   *
+   * Chỉ chạy khi HR bấm — cố ý không tự động theo mỗi lần gõ. Spec đi thẳng vào
+   * điểm số, nên nó chỉ được đổi khi có người chủ động quyết. Tự ghi đè sau
+   * lưng nghĩa là sửa một câu mô tả có thể âm thầm đổi ngưỡng của tiêu chí đã
+   * duyệt.
+   */
+  const resync = async (keepKind?: SpecKind) => {
+    if (!canEdit || resyncing) return;
+    setResyncing(true); setResyncError('');
+    try {
+      const { data } = await rubricApi.previewSpec({
+        name: item.name.trim(),
+        description: item.description.trim(),
+        expected_evidence_keywords: keywordList,
+      });
+      const inferred = data.requirement_spec as Record<string, unknown>;
+      // Giữ loại HR vừa chọn: máy có thể suy ra loại khác (ví dụ mô tả nêu cả
+      // số năm lẫn bằng cấp), nhưng ý người dùng phải thắng.
+      onChange({ requirement_spec: keepKind ? { ...inferred, kind: keepKind } : inferred });
+    } catch (err: any) {
+      setResyncError(err.response?.data?.detail || t('Không suy lại được.'));
+    } finally {
+      setResyncing(false);
+    }
+  };
+
+  /**
+   * Đổi loại tiêu chí.
+   *
+   * Vì sao phải hỏi máy chủ ngay tại đây: schema (cố ý, theo audit M1) từ chối
+   * tiêu chí YEARS không có `min_years`, DEGREE không có bậc, LANGUAGE không có
+   * mức. Nên nếu HR chọn YEARS trên một tiêu chí chưa có ngưỡng mà form gửi
+   * thẳng `{kind:'YEARS'}` thì lần Lưu kế tiếp sẽ 422 — đúng lỗi đã xảy ra.
+   *
+   * Cách sửa: chọn loại xong thì hỏi máy nó suy ra ngưỡng gì từ tên + mô tả,
+   * điền sẵn cho HR xem và sửa. HR vẫn là người quyết cuối; form chỉ không để
+   * họ rơi vào trạng thái không lưu được.
+   *
+   * Nếu máy cũng không suy ra được (mô tả không nêu con số), ô ngưỡng hiện ra
+   * trống kèm lời nhắc — vẫn không gửi lên được cho tới khi HR điền. Đó là hành
+   * vi đúng: tiêu chí "số năm" mà không nêu số năm thì chưa phải tiêu chí.
+   */
+  const changeKind = async (next: SpecKind) => {
+    const base: Record<string, unknown> = { ...(spec || {}), kind: next };
+    if (next !== 'YEARS') base.min_years = null;
+    if (next !== 'DEGREE') base.required_degree_level = null;
+    if (next !== 'LANGUAGE') {
+      base.required_languages = [];
+      base.required_ielts = null;
+      base.required_toeic = null;
+      base.required_cefr = null;
+      base.required_language_rank = null;
+    }
+    onChange({ requirement_spec: base });
+    // Loại mới cần ngưỡng mà chưa có: mượn luôn đường suy luận của nút
+    // "Suy lại", chỉ để điền sẵn — không ghi đè thứ HR đã nhập.
+    const needsThreshold = (
+      (next === 'YEARS' && base.min_years == null)
+      || (next === 'DEGREE' && base.required_degree_level == null)
+      || (next === 'LANGUAGE' && !(base.required_languages as string[] | undefined)?.length
+          && base.required_ielts == null)
+    );
+    if (needsThreshold) await resync(next);
   };
 
   return (
@@ -115,7 +218,7 @@ export default function RubricItemEditor({
         />
       </Box>
 
-      {/* ─── Dòng 2: mô tả — đủ rộng, không bị ép cạnh ô khác ──────────────── */}
+      {/* ─── Dòng 2: mô tả — một hàng riêng, đủ rộng ──────────────────────── */}
       <Box sx={{ pl: '28px', mb: 1.25 }}>
         <TextField
           size="small"
@@ -127,18 +230,18 @@ export default function RubricItemEditor({
           value={item.description}
           disabled={!canEdit}
           onChange={e => onChange({ description: e.target.value })}
-          helperText={t('Máy đọc tên và mô tả để tự suy ra cách so khớp. Không cần điền gì thêm.')}
+          helperText={t('Máy đọc tên và mô tả để tự suy ra cách so khớp.')}
           FormHelperTextProps={{ sx: { mx: 0 } }}
         />
       </Box>
 
-      {/* ─── Dòng 3: trọng số + loại tiêu chí. Hai ô cùng bề rộng, thẳng hàng ─ */}
+      {/* ─── Dòng 3: trọng số + loại tiêu chí, thẳng hàng trên lưới ────────── */}
       <Box
         sx={{
           pl: '28px',
           display: 'grid',
           gap: 1.25,
-          gridTemplateColumns: { xs: '1fr', sm: '130px minmax(0, 240px)' },
+          gridTemplateColumns: { xs: '1fr', sm: '130px minmax(0, 260px)' },
           alignItems: 'start',
           mb: 1.25,
         }}
@@ -159,14 +262,81 @@ export default function RubricItemEditor({
           value={kind}
           disabled={!canEdit}
           onChange={e => changeKind(e.target.value as SpecKind)}
-          helperText={t('Chọn kiểu bằng chứng cần tìm trong CV.')}
-          FormHelperTextProps={{ sx: { mx: 0 } }}
+          InputLabelProps={{ shrink: true }}
+          SelectProps={{
+            MenuProps: { PaperProps: { sx: { '& .MuiMenuItem-root': { minHeight: 36 } } } },
+          }}
         >
           {SPEC_KINDS.map(k => <MenuItem key={k} value={k}>{t(KIND_LABEL[k])}</MenuItem>)}
         </TextField>
       </Box>
 
-      {/* ─── Dòng 4: từ khoá. Nhãn gọn, hướng dẫn nằm trong tooltip ─────────── */}
+      {/* ─── Dòng 4: ngưỡng — chỉ hiện khi loại cần, và chỉ hiện thứ liên quan ─ */}
+      {canEdit && kind === 'YEARS' && (
+        <Box sx={{ pl: '28px', mb: 1.25 }}>
+          <TextField
+            size="small"
+            type="number"
+            label={t('Số năm tối thiểu')}
+            value={numberOf(spec?.min_years)}
+            onChange={e => patchSpec({ min_years: e.target.value === '' ? null : Number(e.target.value) })}
+            inputProps={{ min: 0, max: 80, step: 0.5 }}
+            helperText={spec?.min_years == null
+              ? t('Chưa có ngưỡng. Máy sẽ dò theo số năm ghi trong mô tả.')
+              : undefined}
+            FormHelperTextProps={{ sx: { mx: 0 } }}
+            sx={{ width: { xs: '100%', sm: 220 } }}
+          />
+        </Box>
+      )}
+
+      {canEdit && kind === 'DEGREE' && (
+        <Box sx={{ pl: '28px', mb: 1.25 }}>
+          <TextField
+            select
+            size="small"
+            label={t('Bậc bằng tối thiểu')}
+            value={numberOf(spec?.required_degree_level)}
+            onChange={e => patchSpec({ required_degree_level: e.target.value === '' ? null : Number(e.target.value) })}
+            helperText={spec?.required_degree_level == null
+              ? t('Chưa có ngưỡng. Để trống thì tiêu chí chỉ dò từ khoá.')
+              : undefined}
+            FormHelperTextProps={{ sx: { mx: 0 } }}
+            sx={{ width: { xs: '100%', sm: 260 } }}
+          >
+            <MenuItem value="">{t('Chưa chọn')}</MenuItem>
+            <MenuItem value={1}>{t('Trung học phổ thông')}</MenuItem>
+            <MenuItem value={2}>{t('Cao đẳng')}</MenuItem>
+            <MenuItem value={3}>{t('Đại học')}</MenuItem>
+            <MenuItem value={4}>{t('Thạc sĩ')}</MenuItem>
+            <MenuItem value={5}>{t('Tiến sĩ')}</MenuItem>
+          </TextField>
+        </Box>
+      )}
+
+      {canEdit && kind === 'LANGUAGE' && (
+        <Box sx={{ pl: '28px', mb: 1.25, display: 'grid', gap: 1.25, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, maxWidth: { sm: 520 } }}>
+          <TextField
+            size="small"
+            label={t('Ngôn ngữ')}
+            placeholder={t('Tiếng Anh, Tiếng Nhật')}
+            value={Array.isArray(spec?.required_languages) ? (spec!.required_languages as string[]).join(', ') : ''}
+            onChange={e => patchSpec({
+              required_languages: e.target.value.split(',').map(v => v.trim()).filter(Boolean),
+            })}
+          />
+          <TextField
+            size="small"
+            type="number"
+            label={t('IELTS tối thiểu')}
+            value={numberOf(spec?.required_ielts)}
+            onChange={e => patchSpec({ required_ielts: e.target.value === '' ? null : Number(e.target.value) })}
+            inputProps={{ min: 0, max: 9, step: 0.5 }}
+          />
+        </Box>
+      )}
+
+      {/* ─── Dòng 5: từ khoá — nhãn gọn, hướng dẫn trong tooltip ────────────── */}
       <Box sx={{ pl: '28px', mb: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.25 }}>
           <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
@@ -189,8 +359,6 @@ export default function RubricItemEditor({
           disabled={!canEdit}
           onChange={e => onKeywordsChange(e.target.value)}
         />
-        {/* Xem lại từ khoá đã tách: gõ thừa dấu phẩy hay dấu cách vẫn thấy đúng
-            những gì máy sẽ dùng, không phải đoán. */}
         {keywordList.length > 0 && (
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
             {keywordList.map(k => (
@@ -208,6 +376,9 @@ export default function RubricItemEditor({
             <Button size="small" onClick={() => onMove(-1)} disabled={index === 0}>{t('Lên')}</Button>
             <Button size="small" onClick={() => onMove(1)}>{t('Xuống')}</Button>
             <Button size="small" color="error" onClick={onRemove}>{t('Xoá tiêu chí')}</Button>
+            <Button size="small" onClick={() => void resync()} disabled={resyncing || !item.name.trim()}>
+              {resyncing ? t('Đang suy lại…') : t('Suy lại từ tên + mô tả')}
+            </Button>
             <Button
               size="small"
               onClick={() => setAdvanced(v => !v)}
@@ -218,9 +389,12 @@ export default function RubricItemEditor({
             </Button>
           </Box>
 
-          {/* Đóng sẵn: phần lớn rubric không cần tới. Chỉ mở khi HR muốn dặn
-              người đọc bằng chứng cách tìm — nội dung này hiện ở trang chấm
-              điểm để người đọc bằng chứng biết cần tìm gì trong CV. */}
+          {resyncError && (
+            <Alert severity="error" sx={{ ml: '28px', mt: 0.5 }} onClose={() => setResyncError('')}>
+              {resyncError}
+            </Alert>
+          )}
+
           <Collapse in={advanced}>
             <Box sx={{ pl: '28px', pt: 1 }}>
               <TextField

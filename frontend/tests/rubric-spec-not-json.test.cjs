@@ -47,11 +47,15 @@ test('HR chọn loại tiêu chí bằng nhãn đọc được, không phải m�
 
 test('đổi loại tiêu chí giữ nguyên phần còn lại của spec', () => {
   // Nếu ghi đè cả object, một tiêu chí "3 năm Python" do AI sinh sẽ mất
-  // `min_years` và `terms` ngay khi HR đổi loại — điểm chấm sẽ sai âm thầm.
+  // `terms` ngay khi HR đổi loại — điểm chấm sẽ sai âm thầm.
+  // Trải object cũ trước rồi mới ghi `kind` là cách duy nhất giữ được phần kia.
   assert.ok(
-    EDITOR.includes('{ ...base, kind: next }'),
+    EDITOR.includes('...(spec || {}), kind: next'),
     'phải trải object cũ rồi mới ghi đè kind',
   );
+  // Và chỉ được xoá ngưỡng của loại KHÔNG còn được chọn.
+  assert.ok(EDITOR.includes("if (next !== 'YEARS') base.min_years = null"));
+  assert.ok(EDITOR.includes("if (next !== 'DEGREE') base.required_degree_level = null"));
 });
 
 test('spec hỏng không làm trắng form', () => {
@@ -79,8 +83,13 @@ test('hướng dẫn bằng chứng bị thu vào khối nâng cao, đóng sẵn
 });
 
 test('gợi ý dài không còn chen giữa các ô', () => {
-  // Gợi ý từng nằm ngay dưới ô nhập làm các ô lệch hàng nhau. Nay chỉ còn
-  // gợi ý ngắn, một dòng, ở đúng hai ô cần giải thích.
+  // Gợi ý từng nằm ngay dưới ô nhập làm các ô lệch hàng nhau; "Phân tách bằng
+  // dấu phẩy" là ví dụ rõ nhất. Nay chỉ còn gợi ý NGẮN, và chỉ ở chỗ thật cần:
+  // mô tả, cảnh báo "chưa có ngưỡng", và ghi chú ở khối nâng cao.
   const helperTexts = (EDITOR.match(/helperText=/g) || []).length;
   assert.ok(helperTexts <= 4, `còn ${helperTexts} chỗ helperText — quá nhiều, sẽ lệch hàng`);
+  // Không helperText nào được dài quá một câu: câu dài phải vào tooltip.
+  for (const match of EDITOR.matchAll(/helperText=\{t\('([^']+)'\)\}/g)) {
+    assert.ok(match[1].length < 90, `gợi ý quá dài (${match[1].length} ký tự): ${match[1]}`);
+  }
 });
