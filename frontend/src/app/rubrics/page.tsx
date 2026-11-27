@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Accordion, AccordionDetails as AccordionContent, AccordionSummary, Alert, Box, Button, Card, CardContent, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useI18n } from '@/i18n/I18nProvider';
+import { localizeServerMessage } from '@/i18n/serverMessages';
 import { positionsApi, rubricApi } from '@/lib/api';
 import { purgeRubricDrafts, readDraft, removeDraft, rubricDraftKey, writeDraft } from '@/lib/localDrafts';
 import { useUnsavedChangesGuard } from '@/hooks/useUnsavedChangesGuard';
@@ -166,7 +167,7 @@ export default function RubricsPage() {
         ? t('Đã sinh nháp từ JD (bỏ {0} tiêu chí không hợp lệ). CHƯA lưu — rà soát rồi bấm lưu.', String(data.rejected_items))
         : t('Đã sinh nháp từ JD. CHƯA lưu — rà soát rồi bấm lưu.'));
     } catch (err: any) {
-      setError(err.response?.data?.detail || t('Không thể sinh rubric từ JD.'));
+      setError(err.response?.data?.detail ? localizeServerMessage(err.response.data.detail) : t('Không thể sinh rubric từ JD.'));
       setSuggestOpen(false);
     } finally { setSuggesting(false); }
   };
@@ -199,7 +200,7 @@ export default function RubricsPage() {
         ? t('Đã sinh nháp từ JD dán tay (bỏ {0} tiêu chí không hợp lệ). CHƯA lưu — rà soát rồi bấm lưu.', String(data.rejected_items))
         : t('Đã sinh nháp từ JD dán tay. CHƯA lưu — rà soát rồi bấm lưu.'));
     } catch (err: any) {
-      setError(err.response?.data?.detail || t('Không thể sinh rubric từ JD dán tay.'));
+      setError(err.response?.data?.detail ? localizeServerMessage(err.response.data.detail) : t('Không thể sinh rubric từ JD dán tay.'));
       setJdOpen(false);
     } finally { setJdBusy(false); }
   };
@@ -244,7 +245,7 @@ export default function RubricsPage() {
   return <Box>
     <Typography variant="h1" sx={{ fontSize: 28, color: '#0A2B57', mb: 1 }}>{t('Thư viện rubric')}</Typography>
     <Typography color="text.secondary" sx={{ mb: 2 }}>{t('HR tạo bản nháp; HR Lead xuất bản. Đề xuất chưa phải chuẩn nghiệp vụ.')}</Typography>
-    {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{t(error)}</Alert>}
+    {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{localizeServerMessage(error)}</Alert>}
     {notice && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setNotice('')} data-testid="rubric-notice">{notice}</Alert>}
     {/* Nháp khôi phục từ trình duyệt: nói rõ nó CHƯA lên máy chủ, và cho bỏ đi
         nếu HR không muốn dùng tiếp — nếu không, nháp cũ sẽ quay lại mãi. */}

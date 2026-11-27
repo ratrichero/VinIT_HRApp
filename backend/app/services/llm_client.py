@@ -8,7 +8,7 @@ from collections import Counter
 from urllib.parse import urlsplit
 import httpx
 from typing import Callable, Dict, Any, List, Literal, Optional
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 from app.core.config import settings
 from app.core.logging import get_logger
 from pydantic import BaseModel, Field, ValidationError
@@ -169,9 +169,64 @@ PROFILE_PROMPT_VERSION = settings.PROFILE_PROMPT_VERSION
 MATCHING_PROMPT_VERSION = settings.MATCHING_PROMPT_VERSION
 
 
+def _http_status_code(status: int) -> str:
+    """Mã lỗi cho một lần gọi AI thất bại theo status HTTP.
+
+    Đặt ở đây chứ không trong ``LLMError`` để chỗ raise không phải biết luật.
+    401/403 là khoá sai — HR không sửa được. 429 là bị giới hạn tốc độ — chờ
+    rồi bấm lại là được. Hai chuyện khác hẳn nhau nên không được chung một câu.
+    """
+    if status in (401, 403):
+        return "AUTH_FAILED"
+    if status == 404:
+        return "NOT_FOUND"
+    if status == 429:
+        return "RATE_LIMITED"
+    if status >= 500:
+        return "PROVIDER_ERROR"
+    return "REQUEST_REJECTED"
+
+
+#: Mã lỗi tất định: gọi lại y nguyên thì kết quả y nguyên. Retry chỉ làm HR
+#: chờ thêm (3 lần, backoff tới ~6 giây) rồi vẫn nhận đúng lỗi đó.
+_NON_RETRYABLE_CODES = frozenset({
+    "POLICY_BLOCKED", "CONFIG_MISSING", "CONFIG_INVALID", "AUTH_FAILED", "NOT_FOUND",
+})
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Lỗi này có đáng thử lại không.
+
+    ``httpx.HTTPError`` luôn đáng (mạng chập chờn, 5xx). ``LLMError`` chỉ đáng
+    khi mã của nó KHÔNG nằm trong nhóm tất định — chưa có mã (None) thì vẫn
+    thử lại để giữ hành vi cũ.
+    """
+    if isinstance(exc, httpx.HTTPError):
+        return True
+    if isinstance(exc, LLMError):
+        return getattr(exc, "code", None) not in _NON_RETRYABLE_CODES
+    return False
+
 class LLMError(Exception):
-    """Base exception for LLM operations"""
-    pass
+    """Base exception for LLM operations, mang theo mã lỗi máy đọc được.
+
+    ``code`` tồn tại vì thông báo cho người dùng cuối phải khác nhau theo
+    nguyên nhân, mà ba nguyên nhân hay gặp lại đòi ba hành động khác hẳn:
+
+    * ``POLICY_BLOCKED`` — máy chủ chưa cho gọi AI ra ngoài (``ALLOW_EXTERNAL_API``
+      tắt). HR không tự sửa được, phải báo Quản trị viên sửa ``.env``.
+    * ``AUTH_FAILED`` — khoá API sai hoặc hết hạn. Cũng phải báo Quản trị viên.
+    * ``INVALID_JSON`` / ``RATE_LIMITED`` / ``TIMEOUT`` — bấm lại có thể được.
+
+    Gộp cả ba thành một câu "kiểm tra cấu hình và thử lại" là bắt HR đoán, và
+    họ không có quyền sửa cả ba.
+
+    Mặc định ``None`` chứ không phải một mã chung: chỗ nào chưa phân loại được
+    thì nói thẳng là chưa phân loại, đừng giả vờ đã biết.
+    """
+    def __init__(self, message: str = "", *, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class JD_Criteria_Schema(BaseModel):
@@ -234,10 +289,10 @@ class LLMClient:
         """Fail closed before sending candidate data to an unapproved endpoint."""
         base_url = base_url if base_url is not None else self.base_url
         if not base_url:
-            raise LLMError("LLM_API_BASE is not configured")
+            raise LLMError("LLM_API_BASE is not configured", code="CONFIG_MISSING")
         parsed = urlsplit(base_url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise LLMError("Invalid LLM API endpoint")
+            raise LLMError("Invalid LLM API endpoint", code="CONFIG_INVALID")
         if settings.ALLOW_EXTERNAL_API and parsed.scheme == "https":
             return
         try:
@@ -247,8 +302,8 @@ class LLMClient:
         except (OSError, ValueError):
             pass
         if settings.ALLOW_EXTERNAL_API:
-            raise LLMError("External AI endpoints require HTTPS")
-        raise LLMError("External AI endpoints are disabled by configuration")
+            raise LLMError("External AI endpoints require HTTPS", code="POLICY_BLOCKED")
+        raise LLMError("External AI endpoints are disabled by configuration", code="POLICY_BLOCKED")
 
     @staticmethod
     def _resolve_api_key(runtime: Dict[str, Any]) -> Optional[str]:
@@ -403,8 +458,14 @@ class LLMClient:
                 return result
             except (LLMError, httpx.HTTPError) as exc:
                 logger.warning("LLM route failed", fallback_index=index, error_type=type(exc).__name__)
+                # Giữ mã của lần thử CUỐI. Trước đây chỗ này ném câu chung và
+                # làm mất mã, nên dù tầng dưới đã phân loại đúng thì tầng API
+                # vẫn chỉ thấy một chuỗi — đúng lý do lỗi AI không phân biệt
+                # được nguyên nhân. Câu chung vẫn giữ nguyên (đừng để lộ chi
+                # tiết nhà cung cấp), chỉ thêm mã máy đọc được.
                 if index == len(routes) - 1:
-                    raise LLMError("All configured LLM routes failed") from None
+                    raise LLMError("All configured LLM routes failed",
+                                   code=getattr(exc, "code", None)) from None
             finally:
                 runtime_context.reset(token)
         raise LLMError("All configured LLM routes failed")
@@ -412,7 +473,7 @@ class LLMClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.HTTPError, LLMError)),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
     )
     async def _call_llm_one(
@@ -563,15 +624,24 @@ class LLMClient:
             except json.JSONDecodeError:
                 failure_category = "INVALID_JSON"
                 logger.error("LLM returned invalid JSON")
-                raise LLMError("Failed to parse LLM response as JSON")
+                raise LLMError("Failed to parse LLM response as JSON", code="INVALID_JSON")
             except httpx.HTTPStatusError as e:
                 failure_category = "HTTP_ERROR"
                 logger.error("LLM API error", status_code=e.response.status_code)
-                raise LLMError(f"LLM API error: {e.response.status_code}")
+                raise LLMError(f"LLM API error: {e.response.status_code}",
+                               code=_http_status_code(e.response.status_code))
+            except httpx.TimeoutException:
+                # TimeoutException là con của HTTPError, phải bắt TRƯỚC nhánh
+                # Exception chung, nếu không timeout bị gộp thành NETWORK_ERROR
+                # và HR nhận câu "bấm thử lại" thay vì biết nên chờ.
+                failure_category = "NETWORK_ERROR"
+                logger.error("LLM request timed out")
+                raise LLMError("LLM request timed out", code="TIMEOUT")
             except Exception as e:
                 failure_category = "NETWORK_ERROR" if isinstance(e, httpx.HTTPError) else "OTHER_ERROR"
                 logger.error("Unexpected error calling LLM", error_type=type(e).__name__)
-                raise LLMError("LLM call failed") from None
+                raise LLMError("LLM call failed",
+                               code="NETWORK_ERROR" if isinstance(e, httpx.HTTPError) else "OTHER_ERROR") from None
             finally:
                 if attempted:
                     if duration_ms is None and started_at is not None:
@@ -942,3 +1012,82 @@ EVALUATION RULES:
 
 # Singleton instance
 llm_client = LLMClient()
+
+
+#: Câu thông báo cho người dùng cuối, theo mã lỗi. Tách khỏi chỗ raise vì cùng
+#: một lỗi phải nói cùng một câu ở mọi màn hình — trước đây mỗi API tự viết một
+#: câu riêng, nên sửa một chỗ là chỗ kia lệch.
+#:
+#: Nguyên tắc: chia theo VIỆC HR PHẢI LÀM, không theo loại lỗi kỹ thuật. HR
+#: không sửa được `.env` lẫn API key — hai nhóm đó phải nói "báo Quản trị viên".
+#: Chỉ nhóm thử lại được mới nói "thử lại".
+LLM_USER_MESSAGES: dict[str, tuple[str, str]] = {
+    # (câu thông báo, mức độ) — mức độ để giao diện chọn màu cảnh báo.
+    "POLICY_BLOCKED": (
+        "Máy chủ chưa được cấu hình để gọi AI ra bên ngoài. Việc này chỉ Quản trị "
+        "viên hệ thống làm được (bật ALLOW_EXTERNAL_API trong tệp cấu hình của máy "
+        "chủ rồi khởi động lại). Báo Quản trị viên, không cần thử lại.",
+        "admin",
+    ),
+    "CONFIG_MISSING": (
+        "Máy chủ chưa có cấu hình AI. Báo Quản trị viên thiết lập ở mục Quản trị → AI.",
+        "admin",
+    ),
+    "CONFIG_INVALID": (
+        "Cấu hình AI trên máy chủ không hợp lệ. Báo Quản trị viên kiểm tra lại địa chỉ "
+        "và mô hình ở mục Quản trị → AI.",
+        "admin",
+    ),
+    "AUTH_FAILED": (
+        "AI từ chối khoá truy cập: khoá sai, đã bị thu hồi hoặc hết hạn. Báo Quản trị "
+        "viên cập nhật khoá ở mục Quản trị → AI.",
+        "admin",
+    ),
+    "NOT_FOUND": (
+        "Không tìm thấy mô hình AI đã cấu hình. Báo Quản trị viên kiểm tra tên mô hình "
+        "ở mục Quản trị → AI.",
+        "admin",
+    ),
+    "RATE_LIMITED": (
+        "AI đang bị giới hạn tốc độ. Chờ một lát rồi thử lại.",
+        "retry",
+    ),
+    "TIMEOUT": (
+        "AI phản hồi quá lâu. Thử lại; nếu vẫn vậy thì báo Quản trị viên.",
+        "retry",
+    ),
+    "PROVIDER_ERROR": (
+        "Nhà cung cấp AI đang gặp lỗi. Thử lại sau ít phút; nếu vẫn vậy thì báo "
+        "Quản trị viên.",
+        "retry",
+    ),
+    "NETWORK_ERROR": (
+        "Máy chủ không kết nối được tới nhà cung cấp AI. Thử lại; nếu vẫn vậy thì báo "
+        "Quản trị viên.",
+        "retry",
+    ),
+    "INVALID_JSON": (
+        "AI trả về nội dung không đọc được. Thử lại — lỗi này thường chỉ xảy ra một lần.",
+        "retry",
+    ),
+    "REQUEST_REJECTED": (
+        "AI từ chối yêu cầu này. Kiểm tra lại nội dung JD rồi thử lại.",
+        "retry",
+    ),
+}
+
+#: Câu dùng khi chưa phân loại được nguyên nhân. Không bịa mã.
+LLM_UNKNOWN_CODE_MESSAGE = (
+    "Không gọi được AI. Thử lại; nếu vẫn vậy thì báo Quản trị viên kèm thời điểm bạn thử."
+)
+
+
+def llm_user_message(exc: "LLMError") -> tuple[str, str | None]:
+    """Đổi một ``LLMError`` thành ``(câu cho người dùng, mã)``.
+
+    Không dùng ``str(exc)``: chuỗi đó là chẩn đoán kỹ thuật (có thể chứa status
+    HTTP, tên model, địa chỉ endpoint) và chỉ nên vào log, không ra giao diện HR.
+    """
+    code = getattr(exc, "code", None)
+    message, kind = LLM_USER_MESSAGES.get(code, (LLM_UNKNOWN_CODE_MESSAGE, None))
+    return message, kind

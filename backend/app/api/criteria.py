@@ -1,14 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
 from uuid import UUID
 from app.core.security import get_current_user
 from app.core.permissions import check_position_access, can_update_application_status
 from app.core.logging import get_logger
-from app.core.exceptions import CriteriaNotApprovedError, NotFoundError
+from app.core.exceptions import NotFoundError
 from app.schemas.criteria import (
     CriteriaItemWeightsUpdate,
     CriteriaVersion,
-    CriteriaVersionCreate,
     CriteriaWeightsUpdate,
     Criterion,
     CriterionCreate,
@@ -17,16 +16,12 @@ from app.schemas.criteria import (
     CriteriaApprovalRequest,
     RequirementSpec
 )
-from app.schemas.common import OperationResponse
-from app.db.supabase import get_supabase_client
 from app.db.database import SessionLocal
 from sqlalchemy import text
 from pydantic import ValidationError
 import json
-import re
-from decimal import Decimal, ROUND_HALF_UP
-from app.services.llm_client import llm_client, LLMError
-from app.services.deterministic_matching import deterministic_matcher
+from decimal import Decimal
+from app.services.llm_client import llm_client, LLMError, llm_user_message
 from app.services.rubric_normalizer import (
     coerce_category as _coerce_category,
     coerce_keywords as _coerce_keywords,
@@ -193,8 +188,12 @@ async def generate_criteria_from_jd(position_id: UUID, current_user: dict = Depe
             position_id=str(position_id),
         )
     except LLMError as exc:
-        logger.error("Criteria generation failed", error_type=type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Không thể tạo tiêu chí bằng AI. Vui lòng kiểm tra cấu hình và thử lại.")
+        # Log giữ chuỗi kỹ thuật; người dùng nhận câu theo VIỆC PHẢI LÀM.
+        logger.error("Criteria generation failed", error_type=type(exc).__name__,
+                     failure_code=getattr(exc, "code", None))
+        message, kind = llm_user_message(exc)
+        raise HTTPException(status_code=503, detail=message,
+                            headers={"X-AI-Error-Kind": kind} if kind else None)
     try:
         raw = draft["criteria"]
         if not isinstance(raw, list) or not raw or len(raw) > 100:

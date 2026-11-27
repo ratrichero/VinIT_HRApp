@@ -716,7 +716,7 @@ export default function PositionDetailPage() {
 
       {error && (
         <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
-          {t(error)}
+          {localizeServerMessage(error)}
         </Alert>
       )}
 

@@ -339,7 +339,7 @@ async def _draft_from_jd_text(jd_text: str, job_title: str, requisition_id: str)
     Trả về ``(items, rejected)``. ``rejected`` được trả về chứ không im lặng:
     HR cần biết bộ nháp này đã bị cắt bớt trước khi tin nó là đầy đủ.
     """
-    from app.services.llm_client import LLMError, llm_client
+    from app.services.llm_client import LLMError, llm_client, llm_user_message
     from app.services.rubric_normalizer import (
         coerce_category, coerce_keywords, coerce_text, coerce_weight,
         normalize_weights_in_group, stored_requirement_spec,
@@ -351,8 +351,11 @@ async def _draft_from_jd_text(jd_text: str, job_title: str, requisition_id: str)
             position_id=None,
         )
     except LLMError as exc:
-        logger.error('Rubric suggestion failed', error_type=type(exc).__name__)
-        raise HTTPException(503, 'Không thể sinh rubric bằng AI. Vui lòng kiểm tra cấu hình và thử lại.') from None
+        # Log giữ chuỗi kỹ thuật; người dùng nhận câu theo VIỆC PHẢI LÀM.
+        logger.error('Rubric suggestion failed', error_type=type(exc).__name__,
+                     failure_code=getattr(exc, 'code', None))
+        message, kind = llm_user_message(exc)
+        raise HTTPException(503, message, headers={'X-AI-Error-Kind': kind} if kind else None) from None
 
     raw = draft.get('criteria') if isinstance(draft, dict) else None
     if not isinstance(raw, list) or not raw or len(raw) > 100:
