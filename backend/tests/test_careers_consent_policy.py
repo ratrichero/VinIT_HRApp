@@ -51,9 +51,34 @@ def test_accepts_real_email_addresses():
     )
     # Và vẫn phải kiểm hợp lệ: bỏ chặn không có nghĩa là nhận chuỗi bất kỳ.
     assert 'validate_email' in CODE, 'mất bước kiểm địa chỉ email'
-    # `test_environment=True` là chế độ dành cho thư viện email-validator khi
-    # chạy test; bỏ đi để không vô tình nới lỏng việc kiểm tên miền.
-    assert 'test_environment' not in CODE, 'còn chế độ test_environment khi kiểm email thật'
+    # `test_environment=True` phải GIỮ: nó cho phép các miền dành riêng
+    # (`.test`, `.example`…) mà bộ test tích hợp dùng. Không có nó thì
+    # `candidate@example.test` nhận 400 — và đó đúng là lỗi CI đã gặp.
+    # Nó không nới lỏng việc kiểm email thật; xem test bên dưới.
+    assert 'test_environment=True' in CODE, 'mất test_environment → miền .test bị từ chối'
+
+
+def test_test_environment_flag_does_not_weaken_real_email_checks():
+    """Cùng một hàm kiểm: miền dành riêng đi qua, email hỏng vẫn bị chặn."""
+    from email_validator import EmailNotValidError, validate_email
+
+    def check(address):
+        # Giống hệt đường nộp hồ sơ: validator chuẩn hoá miền, còn phần tên giữ
+        # nguyên hoa/thường — bước `.lower()` trong endpoint mới hạ hết.
+        return validate_email(address, check_deliverability=False,
+                              test_environment=True).normalized.lower()
+
+    # Miền dành riêng: phải qua, nếu không bộ test tích hợp không chạy được.
+    assert check('candidate@example.test') == 'candidate@example.test'
+    # Email thật: phải qua, đây là yêu cầu mới.
+    assert check('Real.Person@Gmail.com') == 'real.person@gmail.com'
+    # Rác: vẫn phải bị chặn — bỏ chặn tên miền không phải nhận bừa.
+    for bad in ('khong-phai-email', 'a@@b', 'a b@c.com', ''):
+        try:
+            check(bad)
+        except EmailNotValidError:
+            continue
+        raise AssertionError(f'email hỏng được chấp nhận: {bad!r}')
 
 
 def test_retention_window_is_twelve_months():

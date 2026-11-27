@@ -64,7 +64,16 @@ async def apply(position_id: UUID, request_id: UUID = Form(...), name: str = For
     try:
         # `check_deliverability=False`: không gọi DNS từ đường nộp hồ sơ. Vừa
         # chậm, vừa để lộ việc hệ thống đi hỏi bản ghi MX của tên miền ứng viên.
-        email = validate_email(email.strip(), check_deliverability=False).normalized.lower()
+        #
+        # `test_environment=True` KHÔNG phải "chế độ thử nghiệm còn sót lại", và
+        # cũng không nới lỏng việc kiểm email thật. Nó chỉ cho phép các **miền
+        # dành riêng** (`.test`, `.example`, `.invalid`, `.localhost`) — những
+        # miền mà email-validator từ chối ở chế độ thường. Cần nó vì bộ test
+        # tích hợp và các tài khoản mẫu dùng `@example.test`; bỏ đi thì chúng
+        # nhận 400 thay vì đi tiếp. Email thật (`@gmail.com`…) vẫn được kiểm
+        # đúng như cũ ở cả hai chế độ.
+        email = validate_email(email.strip(), check_deliverability=False,
+                               test_environment=True).normalized.lower()
     except EmailNotValidError:
         raise HTTPException(400, 'Địa chỉ email không hợp lệ') from None
     if not name or len(name) > 200 or len(phone) > 50 or len(email) > 254:
