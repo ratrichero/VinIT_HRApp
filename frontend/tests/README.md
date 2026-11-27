@@ -1,5 +1,19 @@
 # Kiểm thử giao diện
 
+## Chạy cả bộ e2e
+
+45 bài `*.e2e.cjs` được khai trong [`e2e-manifest.cjs`](e2e-manifest.cjs) theo ba nhóm — **xanh** (chạy được chỉ với Next server + mock `/v1`), **đỏ** (đang hỏng, ghi lý do) và **cần stack thật**. `run-e2e.cjs` chạy từng bài trong một tiến trình riêng và in `PASS`/`FAIL` từng file:
+
+```bash
+cd frontend
+npm run build && npx next start -p 3000 &
+HRA_E2E_BASE_URL=http://127.0.0.1:3000 npm run test:e2e            # cả bộ, báo cả bài đỏ
+HRA_E2E_BASE_URL=http://127.0.0.1:3000 npm run test:e2e:green      # đúng nhóm CI chạy
+HRA_E2E_BASE_URL=http://127.0.0.1:3000 npm run test:e2e -- --only sticky --timeout 60
+```
+
+Muốn một bài từ nhóm đỏ sang nhóm xanh thì sửa mã (hoặc mock của fixture) rồi chuyển dòng của nó trong manifest; đừng nới assertion. `test-manifest.test.cjs` canh việc này: file e2e có trên đĩa mà không có trong manifest, hoặc nhóm xanh không được CI gọi, đều làm test đỏ.
+
 `npm run test:i18n` chạy unit test không cần browser: dictionary, interpolation, chuyển ngôn ngữ của thông báo đang hiển thị và kiểm tra key UI có bản dịch Anh.
 
 `npm run test:e2e:accounts` kiểm tra bootstrap, quản trị tài khoản, đổi mật khẩu tạm, HR chọn HM, phân quyền và mobile bằng Chromium. Script intercept **toàn bộ** `/v1` và dùng response giả, không gọi Auth/backend thật; vẫn chỉ chạy với Next server cục bộ dùng một lần. Ví dụ sau khi chạy Next cục bộ trên port 3000 và cài Chromium:

@@ -9,6 +9,63 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-27 — 45 bài e2e: 15 bài không ai chạy, và một job CI chỉ chạy nhóm đang xanh
+
+**Vấn đề đo được.** `frontend/tests` có **45 file `*.e2e.cjs`**. Đọc `package.json`
+bằng máy: **15 file không được script nào nhắc tới** (con số 13 trong yêu cầu là
+đếm thiếu — đo lại ra 15: `by-criterion-confirm-all`,
+`by-criterion-double-confirm`, `careers-demo`, `criterion-queue`,
+`duplicate-compare`, `finish-direct-advance`, `mandatory-fail-finish`,
+`measure-review-loop`, `prefetch-next-profile`, `profile-lazy-panels`,
+`review-auto-advance`, `review-double-confirm`, `sticky-bar-height`,
+`sticky-review-actions`, `test-data-purge-mock`). `test-manifest.test.cjs` chỉ
+canh `*.test.cjs`, nên không ai thấy. CI cũng **không có job e2e nào**.
+
+**Cách sửa — ba mảnh.**
+
+1. `tests/e2e-manifest.cjs`: danh sách duy nhất của cả 45 bài, chia **xanh / đỏ /
+   cần stack thật**, mỗi bài đỏ có lý do đã quan sát (không phải "chắc là flaky").
+2. `tests/run-e2e.cjs` + `npm run test:e2e` (cả bộ) và `npm run test:e2e:green`
+   (đúng nhóm CI chạy). Mỗi bài một tiến trình riêng, có trần thời gian, in
+   `PASS`/`FAIL` từng file, kết thúc bằng `x/45 xanh, y đỏ` và exit code thật.
+   Runner kiểm server một lần trước khi chạy để không đẻ ra 32 lỗi giả
+   "Target page has been closed".
+3. Job `frontend-e2e` trong `.github/workflows/ci.yml`: cài Chromium khớp
+   `playwright-core` (`npx playwright-core install --with-deps chromium`), build,
+   dựng `next start` và chờ tới khi trả lời, rồi chạy **chỉ nhóm xanh**.
+
+**Không sửa test nào để làm xanh.** 11 bài đỏ nằm nguyên trong nhóm RED kèm lý do:
+nhóm lớn nhất (5 bài) chết vì fixture mock trong `fixtures/hr-screens.cjs` thiếu
+`/v1/notifications` — header gọi endpoint đó ở mọi trang đã đăng nhập; sửa một
+chỗ trong fixture sẽ mở khoá cả nhóm. Còn lại: `retention-ui` đếm request và coi
+`/v1/notifications` + `/v1/dashboard/work-queue` là bất thường; `careers-public`,
+`test-data-purge-mock`, `intake-ui` timeout chờ phần tử; `ux-metrics` sai ở
+"leaving the profile records the leave event"; `ux04-sticky-viewer` đo tiêu đề CV
+118px trong khi thanh dính 143px. Hai bài cần stack thật (`careers-demo`,
+`synthetic-ui`) không thể chạy bằng mock.
+
+**Đo lại bằng runner, không bằng niềm tin.**
+
+| Nhóm | Kết quả | Thời gian |
+| --- | --- | --- |
+| xanh (`npm run test:e2e:green`) | **32/32 xanh** | 201,7s |
+| đỏ (`--group red`) | **0/11 xanh, 11 đỏ**, exit 1 | 109,8s |
+
+**Kiểm ngược manifest test** (2 lần, mỗi lần phục hồi rồi chạy lại):
+xoá một file khỏi manifest → `moi file e2e deu co trong e2e-manifest` đỏ; đổi
+bước CI `npm run test:e2e:green` thành `echo skipped` → `nhom e2e xanh phai duoc
+CI goi that` đỏ. Phục hồi: 5/5 xanh.
+
+**Đã chạy.** `test:unit` **237 pass** (234 cũ + 3 test manifest mới);
+`test:i18n` 6 pass; `test:e2e:green` 32/32; `test:e2e --group red` báo đúng 11 bài.
+
+**Chưa kiểm.** Job CI **chưa chạy thật** trên GitHub (mới kiểm cú pháp YAML bằng
+mắt và bằng test canh chuỗi lệnh) — lần push đầu sẽ là lần chạy đầu. Runner ở
+máy chạy Chromium 156 (headless shell) với thư viện/font cài trong `/tmp`, còn CI
+cài Chromium bằng `--with-deps`; chênh lệch môi trường đó chỉ lộ ra ở job thật.
+`npm run test:e2e` (cả bộ) **chưa chạy một lượt trọn vẹn**: 2 bài cần stack thật
+sẽ đỏ, và 11 bài đỏ đã đo riêng.
+
 ## 2026-11-27 — Từ điển i18n: 78 khoá trả về tiếng Việt, 30 giá trị trùng, và hai test chặn
 
 **Vấn đề.** `test:i18n` chỉ kiểm *có entry*, không kiểm entry nói gì, nên hai lỗi

@@ -102,6 +102,61 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Nhóm e2e **đang xanh** (danh sách ở frontend/tests/e2e-manifest.cjs). Bài
+  # đang đỏ không bị nới assertion để vào đây; chúng nằm trong nhóm RED của
+  # manifest kèm lý do, và `npm run test:e2e` (chạy cả bộ) sẽ báo chúng.
+  frontend-e2e:
+    name: Frontend e2e (green group)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      HRA_E2E_BASE_URL: http://127.0.0.1:3000
+      # Runner GitHub chạy bằng root và /dev/shm nhỏ.
+      HRA_E2E_CHROMIUM_ARGS: '["--no-sandbox","--disable-dev-shm-usage"]'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium matching playwright-core
+        run: npx playwright-core install --with-deps chromium
+
+      - name: Build
+        run: npm run build
+
+      - name: Start Next server and wait until it answers
+        run: |
+          npx next start -p 3000 > next-start.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl -sf -o /dev/null http://127.0.0.1:3000/dashboard; then
+              echo "server ready after ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'server did not answer within 60s'
+          cat next-start.log
+          exit 1
+
+      - name: Run the e2e tests that pass today
+        run: npm run test:e2e:green
+
+      - name: Show Next server log
+        if: failure()
+        run: cat next-start.log
+
   backend-integration:
     name: Backend integration (disposable PostgreSQL + pgvector)
     runs-on: ubuntu-latest

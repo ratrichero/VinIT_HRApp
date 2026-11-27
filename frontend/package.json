@@ -39,7 +39,9 @@
     "test:e2e:careers-public": "node tests/careers-public.e2e.cjs",
     "test:e2e:retention": "node tests/retention-ui.e2e.cjs",
     "test:e2e:ux-metrics": "node tests/ux-metrics.e2e.cjs",
-    "test:e2e:position-partial": "node tests/position-open-partial-failure.e2e.cjs"
+    "test:e2e:position-partial": "node tests/position-open-partial-failure.e2e.cjs",
+    "test:e2e": "node tests/run-e2e.cjs",
+    "test:e2e:green": "node tests/run-e2e.cjs --group green"
   },
   "dependencies": {
     "@emotion/cache": "11.14.0",
