@@ -162,9 +162,21 @@ UNCERTAIN_CUES = (
 DEGREE_PATTERNS: tuple[tuple[int, tuple[str, ...]], ...] = (
     (5, ("phd", "ph d", "doctorate", "doctoral degree", "tien si")),
     (4, ("master", "masters", "msc", "mba", "meng", "thac si")),
-    (3, ("bachelor", "bachelors", "bsc", "beng", "bs", "ba", "cu nhan")),
+    # "dai hoc" là cách người Việt viết phổ biến nhất cho bậc đại học, và nó
+    # không chứa "cu nhan" nên trước đây bị bỏ sót: "Tốt nghiệp đại học" và
+    # "Đại học trở lên" đều rơi về kind=SKILL, tức máy đi dò từ khoá thay vì so
+    # bậc bằng. Xếp cùng bậc 3 với "cu nhan"/"bachelor" là đúng nghĩa.
+    (3, ("bachelor", "bachelors", "bsc", "beng", "bs", "ba", "cu nhan", "dai hoc")),
     (2, ("associate degree", "cao dang")),
     (1, ("high school", "thpt", "trung hoc pho thong")),
+)
+
+#: Cụm báo hiệu yêu cầu học vấn mà không nêu bậc. Tách khỏi ``DEGREE_PATTERNS``
+#: vì chúng không cho biết *bậc nào*, chỉ cho biết *đây là tiêu chí học vấn* —
+#: đủ để xếp kind=DEGREE (và để HR thấy ô "Bậc bằng tối thiểu" mà điền), nhưng
+#: không đủ để tự đoán một con số.
+DEGREE_CUES: tuple[str, ...] = (
+    "tot nghiep", "bang cap", "hoc van", "trinh do hoc van", "qualification",
 )
 
 CEFR_RANK = {"a1": 1, "a2": 2, "b1": 3, "b2": 4, "c1": 5, "c2": 6}
@@ -646,7 +658,7 @@ class DeterministicMatchingEngine:
         )
         has_degree = required_degree is not None or any(
             marker in normalized for marker in ("degree", "bachelor", "master", "phd", "cu nhan", "thac si", "tien si")
-        )
+        ) or any(_contains_phrase(normalized, cue) for cue in DEGREE_CUES)
         # A *mention* of language is not a language requirement. "Excellent
         # communication skills" or "proficiency in presenting" are ordinary soft
         # skills: marking them LANGUAGE produced a spec with kind=LANGUAGE and no
@@ -673,6 +685,12 @@ class DeterministicMatchingEngine:
             kind = "YEARS"
         else:
             kind = "SKILL"
+
+        # kind=DEGREE mà không biết bậc: để trống cho HR điền, ĐỪNG đoán. Đoán
+        # bừa một bậc là gán cho ứng viên một ngưỡng chưa ai duyệt, và ngưỡng đó
+        # đi thẳng vào điểm số.
+        if kind == "DEGREE" and required_degree is None:
+            required_degree = None
 
         groups = self._merge_container_delivery_terms(groups)
         groups = self._merge_python_framework_terms(groups)

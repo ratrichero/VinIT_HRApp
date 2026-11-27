@@ -322,6 +322,9 @@ export const rubricApi = {
   // Cũng không lưu gì trên máy chủ.
   suggestFromJd: (data: { job_family_id: string; jd_text: string; title?: string }) =>
     apiClient.post('/rubric-library/suggest-from-jd', data),
+  // Máy sẽ so khớp tiêu chí này theo cách nào. Thuần tính toán, không lưu gì.
+  previewSpec: (data: { name: string; description: string; expected_evidence_keywords: string[] }) =>
+    apiClient.post('/rubric-library/preview-spec', data),
 };
 
 /**

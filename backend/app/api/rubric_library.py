@@ -500,3 +500,34 @@ async def suggest_from_jd_text(request: SuggestFromJdText, user: dict = Depends(
         'rejected_items': rejected,
         'note': 'Đây là bản nháp chưa lưu. Rà soát, sửa rồi mới bấm lưu vào thư viện.',
     }
+
+
+class PreviewSpecRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default='', max_length=4000)
+    expected_evidence_keywords: list[str] = Field(default_factory=list, max_length=50)
+
+
+@router.post('/preview-spec')
+def preview_requirement_spec(request: PreviewSpecRequest, user: dict = Depends(get_current_user)):
+    """Cho HR xem máy sẽ so khớp tiêu chí này theo cách nào, **không lưu gì**.
+
+    Vì sao cần: ``requirement_spec`` được suy ra từ tên + mô tả + từ khoá, nên
+    HR sửa chữ là cách so khớp đổi theo — nhưng thay đổi đó chỉ lộ ra sau khi
+    bấm Lưu. Nút "Suy lại từ tên + mô tả" gọi endpoint này để HR thấy ngay.
+
+    Cố ý **không** tự động gọi mỗi lần HR gõ: spec là thứ đi thẳng vào điểm số,
+    nên chỉ đổi khi HR chủ động bấm. Máy tự ghi đè sau lưng thì một lần sửa câu
+    mô tả có thể âm thầm đổi ngưỡng của tiêu chí đã duyệt.
+
+    Không đụng DB, không gọi model — chỉ chạy đúng hàm mà lúc chấm điểm sẽ chạy,
+    nên thứ HR thấy ở đây là thứ sẽ thực thi.
+    """
+    from app.services.rubric_normalizer import stored_requirement_spec
+
+    spec = stored_requirement_spec({
+        'name': request.name.strip(),
+        'description': request.description.strip(),
+        'expected_evidence_keywords': request.expected_evidence_keywords,
+    })
+    return {'requirement_spec': spec}
