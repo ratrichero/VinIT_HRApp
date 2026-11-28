@@ -127,7 +127,11 @@ class FakeAuthAdmin:
 def reset_disposable_database():
     with engine.begin() as conn:
         # Cascades through the entire test schema, not just account tables.
-        conn.execute(text("TRUNCATE auth.users CASCADE"))
+        # RESTART IDENTITY cũng đặt lại `app_private.audit_event_chain_seq`:
+        # CASCADE xoá `audit_events` (FK tới auth.users) nhưng không tự đặt lại
+        # sequence của bảng bị xoá qua cascade, nên lần chạy sau trên cùng DB sẽ
+        # nối tiếp chuỗi hash của lần trước.
+        conn.execute(text("TRUNCATE auth.users RESTART IDENTITY CASCADE"))
         conn.execute(text("UPDATE app_private.account_initialization SET initialized_at=NULL, initialized_by=NULL WHERE singleton=TRUE"))
         # The Auth cascade also truncates policy tables that refer to users.
         conn.exec_driver_sql("""INSERT INTO app_private.assessment_policy_versions

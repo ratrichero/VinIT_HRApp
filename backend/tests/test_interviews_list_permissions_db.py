@@ -62,7 +62,10 @@ def calendar():
         "hr", "interviewer", "outsider", "pos", "app_a", "app_b", "iv_a", "iv_b",
     )}
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE app_private.positions CASCADE"))
+        # RESTART IDENTITY: CASCADE xoá `audit_events` nhưng không đặt lại
+        # `app_private.audit_event_chain_seq`, nên lần chạy sau sẽ nối tiếp
+        # chuỗi hash của lần trước trên cùng DB.
+        conn.execute(text("TRUNCATE app_private.positions RESTART IDENTITY CASCADE"))
         for key in ("hr", "interviewer", "outsider"):
             conn.execute(text("INSERT INTO auth.users(id) VALUES (:id)"), {"id": ids[key]})
             conn.execute(

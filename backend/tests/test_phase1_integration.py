@@ -25,7 +25,15 @@ def seed():
     ids = {key: uid() for key in ("hr", "hm", "other", "hr2", "pos", "pos2", "jd", "cv", "criterion", "app", "app2")}
     with engine.begin() as conn:
         # Only positions (and dependent data) are truncated; the default scoring policy remains intact.
-        conn.execute(text("TRUNCATE app_private.positions CASCADE"))
+        #
+        # `RESTART IDENTITY` là phần bắt buộc, không phải cho đẹp: CASCADE xoá cả
+        # `audit_events` (FK tới positions), nhưng sequence
+        # `app_private.audit_event_chain_seq` gắn với bảng bị xoá *qua cascade* nên
+        # PostgreSQL để nguyên nó. Thiếu cụm này thì event audit đầu tiên của lần
+        # chạy thứ hai mang `chain_sequence` nối tiếp lần trước (đo được 2998 →
+        # 3748), tức chuỗi hash "mới" không bắt đầu ở 1. Xem
+        # `test_audit_chain_restarts_after_fixture_clears_audit_events`.
+        conn.execute(text("TRUNCATE app_private.positions RESTART IDENTITY CASCADE"))
         conn.execute(text("TRUNCATE app_private.departments CASCADE"))
         # Cài đặt HR không nằm trong CASCADE của positions, nên nó là trạng thái
         # bền duy nhất mà test này để lại: `test_hr_settings_round_trip...` PATCH
@@ -1788,6 +1796,45 @@ def test_retention_workflow_purges_candidate_and_audit_chain_is_append_only(clie
     tampered = client.get("/v1/admin/audit/verify", headers=headers(seed["other"]))
     assert tampered.status_code == 200 and tampered.json()["valid"] is False
     assert tampered.json()["broken_events"] >= 1
+
+
+def test_audit_chain_restarts_after_fixture_clears_audit_events(seed):
+    """Chuỗi hash phải bắt đầu lại ở 1 sau khi fixture xoá `audit_events`.
+
+    `TRUNCATE app_private.positions CASCADE` xoá `audit_events` (nó có FK tới
+    `positions`) nhưng để nguyên sequence `app_private.audit_event_chain_seq`:
+    sequence này thuộc bảng bị xoá qua CASCADE, không phải bảng được truncate
+    trực tiếp, nên PostgreSQL không đặt lại nó. Trigger `set_audit_event_hash`
+    luôn dùng `nextval`, nên lần chạy thứ hai trên cùng DB thấy event đầu tiên
+    mang `chain_sequence` nối tiếp lần trước — đo được 2998 → 3748 qua hai lần
+    chạy đầy đủ. Chỉ lộ ra khi chạy hai lần liền trên cùng DB, không lộ khi mỗi
+    lần dựng DB mới.
+
+    Bất biến này là của nghiệp vụ, không phải của test: luồng purge
+    (`app/services/test_data_purge.py`) chủ động đưa chuỗi mới về số nhỏ như vậy.
+
+    Không khẳng định `chain_sequence == 1` được: cột này có DEFAULT
+    `nextval(...)` *và* trigger cũng gọi `nextval(...)`, nên một lần INSERT tiêu
+    hai số (đã ghim ở `test_test_data_purge.py`). Vì thế event đầu của chuỗi mới
+    là 2 khi DEFAULT còn, là 1 khi luồng purge đã gỡ DEFAULT. Cái phải đúng
+    trong cả hai trường hợp là sequence đã được đặt lại — nếu không nó sẽ là
+    3748 như đo được, chứ không phải 1 hay 2.
+    """
+    with engine.begin() as conn:
+        sequence = conn.execute(text(
+            "SELECT last_value, is_called FROM app_private.audit_event_chain_seq"
+        )).mappings().one()
+        probe = conn.execute(text("""
+            INSERT INTO app_private.audit_events (action_type, object_type, object_id, position_id, outcome)
+            VALUES ('CHAIN_RESET_PROBE', 'POSITION', :pos, :pos, 'SUCCESS')
+            RETURNING chain_sequence, previous_event_hash
+        """), {"pos": seed["pos"]}).mappings().one()
+    assert (sequence["last_value"], sequence["is_called"]) == (1, False), (
+        "sequence app_private.audit_event_chain_seq không được đặt lại cùng lúc với "
+        f"audit_events (last_value={sequence['last_value']}) — lần chạy sau sẽ nối tiếp chuỗi cũ"
+    )
+    assert probe["chain_sequence"] <= 2, f"chuỗi mới phải bắt đầu ở số nhỏ, đang là {probe['chain_sequence']}"
+    assert probe["previous_event_hash"] is None
 
 
 def test_retention_case_cannot_be_confirmed_before_due_date(client, seed):

@@ -9,6 +9,129 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-28 — Soát nhiễm trạng thái giữa hai lần chạy: chỉ `audit_events` còn nhiễm
+
+**Vấn đề.** Commit `b84d617` đã sửa một ca nhiễm (`app_settings` giữ
+`deadline_soon_days = 14` sau khi test PATCH), nhưng đó là ca *tình cờ gặp*: chạy
+hai lần liền trên cùng DB thì đỏ, chứ không có cách nào biết còn bảng nào khác
+đang giữ trạng thái. Cần soát có hệ thống, và ghi lại đã soát bảng nào để lần sau
+không soát lại từ đầu.
+
+**Cách soát.** Chạy **toàn bộ** suite backend 4 lượt liên tiếp trên **cùng một DB**
+(`hra_fixnum_test`, cổng 55441, không dựng lại giữa các lượt). Sau mỗi lượt, chụp
+cả 68 bảng của `app_private`, `auth`, `public`: số dòng + md5 của toàn bộ nội dung
+sau khi **che các cột `uuid` và thời gian** — nếu không che, mọi bảng đều "đổi"
+mỗi lượt chỉ vì id và `created_at` mới, và phép so sánh thành vô dụng. Với những
+bảng còn khác, dump từng dòng (vẫn che cột biến động) rồi đọc giá trị thật để
+tách "giá trị sinh mỗi lượt" khỏi "trạng thái mang sang". Cũng soát `pg_sequences`:
+chỉ **một** sequence có giá trị (`app_private.audit_event_chain_seq`).
+
+**Kết quả soát 68 bảng.**
+
+| Nhóm | Số bảng | Kết luận |
+| --- | --- | --- |
+| Không đổi cả số dòng lẫn giá trị | 58 | sạch |
+| Chỉ đổi ở cột sinh mỗi lượt | 9 | sạch (xem cột gây đổi bên dưới) |
+| Nhiễm thật | 1 | `audit_events` |
+
+Số dòng **không đổi** ở mọi bảng qua cả 4 lượt — không bảng nào tích luỹ dữ liệu;
+nếu chỉ so số dòng thì sẽ kết luận sai là không có nhiễm, nên phải so cả giá trị.
+
+9 bảng "đổi mà sạch", kèm cột gây đổi (đều là giá trị sinh ngẫu nhiên mỗi lượt):
+
+| Bảng | Cột đổi giữa hai lượt |
+| --- | --- |
+| `ai_auxiliary_config_drafts` | `api_key_ciphertext` (Fernet, IV ngẫu nhiên), `model_version` |
+| `ai_configuration_versions` | `api_key_ciphertext`, `fallback_config_ids` (uuid) |
+| `bge_route_sets` | `route_config_ids` (uuid) |
+| `deletion_events` | `application_opaque_id` (sha256 của application id) |
+| `ltr_managed_selections` | `model_version`, `artifact_sha256` |
+| `ltr_model_review_events` | `model_version`, `artifact_sha256` |
+| `ltr_model_versions` | `model_version`, `artifact_sha256` |
+| `positions` | `position_code` (uuid) |
+| `talent_pool_consents` | `token_hash` (token ngẫu nhiên) |
+
+Bảng thứ 10 có đổi giá trị là `audit_events` (`event_hash`, `previous_event_hash`
+băm cả `event_id`/`created_at` nên luôn khác), nhưng nó không sạch: xem ngay dưới.
+
+**Bảng nhiễm thật: `app_private.audit_events`.** Không phải dòng dữ liệu — dòng bị
+xoá đúng — mà là **sequence** `app_private.audit_event_chain_seq`. Fixture dùng
+`TRUNCATE app_private.positions CASCADE`; CASCADE xoá `audit_events` (nó có FK tới
+`positions`), nhưng PostgreSQL chỉ đặt lại sequence của bảng được truncate **trực
+tiếp**, không đặt lại sequence của bảng bị xoá qua cascade. Trigger
+`set_audit_event_hash` luôn `nextval`, nên event đầu tiên của lần chạy sau nối
+tiếp số của lần trước — **đo được 2998, 3000 ở lượt trước và 3748, 3750 ở lượt
+sau**. Không test nào đỏ vì chưa test nào ghim số này, nhưng chuỗi hash "mới"
+không còn bắt đầu ở số nhỏ, và mọi phép kiểm dựa vào `chain_sequence` (đối chiếu
+`previous_event_hash`, đếm event của một ca) sẽ phụ thuộc vào việc đã chạy bao
+nhiêu lượt trước đó.
+
+**Sửa.** Thêm `RESTART IDENTITY` vào đúng ba fixture có truncate kéo theo
+`audit_events`:
+
+- `backend/tests/test_phase1_integration.py` — fixture `seed` (positions CASCADE)
+- `backend/tests/test_interviews_list_permissions_db.py` — fixture `calendar` (positions CASCADE)
+- `backend/tests/test_accounts.py` — `reset_disposable_database` (auth.users CASCADE; `audit_events` cũng có FK tới `auth.users`)
+
+Cú pháp phải là `TRUNCATE … RESTART IDENTITY CASCADE`, **không** phải
+`… CASCADE RESTART IDENTITY` (sai thứ tự là lỗi cú pháp).
+
+**Test ghim.** `test_audit_chain_restarts_after_fixture_clears_audit_events` trong
+`test_phase1_integration.py` khẳng định sau fixture: sequence ở trạng thái đã đặt
+lại (`last_value = 1`, `is_called = false`), event thử có `previous_event_hash
+IS NULL` và `chain_sequence <= 2`. Không khẳng định `== 1` vì cột có DEFAULT
+`nextval` **và** trigger cũng `nextval` — một INSERT tiêu hai số (đã ghim ở
+`test_test_data_purge.py`), nên event đầu là 2 khi DEFAULT còn, là 1 khi luồng
+purge đã gỡ DEFAULT.
+
+**Kiểm ngược.** Gỡ `RESTART IDENTITY` khỏi fixture `seed` rồi chạy riêng test:
+**đỏ** với `assert (2, True) == (1, False)` — tức sequence nối tiếp thay vì đặt
+lại. Khôi phục thì **xanh 2 lượt liền** trên cùng DB.
+
+**Kết quả toàn bộ suite trên cùng DB `hra_fixnum_test` (không dựng lại):**
+
+| Lượt | Kết quả |
+| --- | --- |
+| 1–4 (trước khi sửa) | 918 passed mỗi lượt |
+| 5 (sau khi sửa, có test mới) | **919 passed, 118,01s** |
+| 6 (lượt liền sau, cùng DB) | **919 passed, 126,39s** |
+
+Sau khi sửa, `audit_events` vẫn còn trong nhóm "đổi giá trị" nhưng chỉ vì
+`event_hash` băm cả `event_id`/`created_at`; số chuỗi thì đã đúng: lượt cuối có
+`chain_sequence` 2 và 4, `previous_event_hash` của event đầu là `NULL`.
+
+**68 bảng đã soát** (`app_private` 67 bảng + `auth.users`):
+
+```
+account_initialization, ai_auxiliary_config_drafts, ai_configuration_versions,
+ai_policy_versions, ai_runtime_controls, app_settings, application_documents,
+application_identities, application_private_notes, application_retention_cases,
+application_status_events, applications, assessment_policy_versions, assessment_runs,
+audit_events, bge_route_sets, careers_intake_receipts, criteria_approval_events,
+criteria_items, criteria_versions, criterion_assessment_results, cv_batch_items,
+cv_batches, cv_chunk_embeddings, deletion_events, deletion_jobs, departments,
+document_processing_runs, duplicate_signals, evidence_items, gmail_test_messages,
+hr_criterion_reviews, interview_notifications, interview_participants, interviews,
+jd_versions, job_families, llm_usage_attempts, ltr_managed_selections,
+ltr_model_review_events, ltr_model_versions, operation_recovery_events, operations,
+position_access_grants, position_assignments, position_create_requests,
+position_status_events, positions, profile_facts, profile_versions, ranking_items,
+ranking_runs, reranker_selections, retention_policy_versions, rubric_template_items,
+rubric_template_versions, rubric_templates, scorecard_reopen_events,
+shortlist_feedback, shortlist_scorecard_criteria, shortlist_scorecards,
+shortlist_share_items, shortlist_shares, talent_pool_consents,
+talent_pool_demo_consents, user_profiles, user_role_assignments, auth.users
+```
+
+**Chưa kiểm.** (1) Chưa chạy trên CI (PG 17 + pgvector 0.8.x) — số test và hành vi
+`RESTART IDENTITY` ở đó chỉ suy ra từ tài liệu PostgreSQL, chưa đo. (2) Phép soát
+chỉ thấy trạng thái **lộ ra qua dữ liệu trong DB**: một bảng giữ nguyên giá trị
+nhưng đổi *ý nghĩa* (ví dụ cờ "đã xử lý" mà không test nào đọc) sẽ không bị phát
+hiện. (3) Trạng thái ngoài DB — file trong `LOCAL_STORAGE_PATH` (mỗi test dùng
+`tmp_path`), hàng đợi/Redis/LLM giả lập — không nằm trong phép soát này. (4) Bảng
+thêm sau này không tự động được soát; muốn soát lại thì chạy hai lượt liền trên
+cùng DB và so fingerprint đã che cột `uuid`/thời gian như mô tả ở trên.
+
 ## 2026-11-28 — `scripts/test-db.sh` in "kỳ vọng 671 passed": số cũ, và không nói đo trên DB nào
 
 **Vấn đề.** Dòng cuối của `scripts/test-db.sh` — dòng người chạy đọc ngay trước
