@@ -70,7 +70,7 @@ const GREEN = [
  * assertion nào bị nới, và mỗi bài vẫn tự đỏ nếu route đó biến mất.
  */
 const RED = [
-  { file: 'careers-public.e2e.cjs', why: 'TimeoutError: chờ phần tử không xuất hiện' },
+  { file: 'careers-public.e2e.cjs', why: 'mock thiếu /v1/careers/filters làm trang nổ client-side (đã thêm route rỗng); còn lại đếm 2 nút "Xem chi tiết" vì thẻ DIV role=button lồng BUTTON cùng nhãn' },
   { file: 'test-data-purge-mock.e2e.cjs', why: 'TimeoutError: chờ phần tử không xuất hiện' },
   { file: 'intake-ui.e2e.cjs', why: 'TimeoutError, kể cả khi đặt HRA_E2E_SYNTHETIC=1' },
   { file: 'ux-metrics.e2e.cjs', why: 'assert "leaving the profile records the leave event" sai' },

@@ -44,6 +44,12 @@ async function installCareersApi(context) {
     if (p === '/v1/careers/jobs' && request.method() === 'GET') {
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [JOB], next_cursor: null }) });
     }
+    // Trang gọi thêm route này để dựng bộ lọc. Trả `{}` ở nhánh cuối thì
+    // `filters.job_families` là undefined và trang nổ ngay khi render
+    // (`undefined.filter`) — lỗi client-side, không phải assertion của test.
+    if (p === '/v1/careers/filters' && request.method() === 'GET') {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ employment_types: [], job_families: [] }) });
+    }
     if (/^\/v1\/careers\/jobs\/[^/]+\/apply$/.test(p) && request.method() === 'POST') {
       applications.push({ body: request.postData() || '', contentType: request.headers()['content-type'] || '' });
       return route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ application_id: 'app-careers', status: 'NEW' }) });

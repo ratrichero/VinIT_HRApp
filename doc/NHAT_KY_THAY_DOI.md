@@ -9,6 +9,57 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-28 — Soát 5 bài e2e RED: không bài nào thiếu `/v1/notifications`, mỗi bài một nguyên nhân khác
+
+**Giả thuyết cần kiểm.** Yêu cầu đặt ra là "5 bài RED chết vì
+`fixtures/hr-screens.cjs` thiếu route `/v1/notifications`". Kiểm lại thì fixture
+dùng chung **đã có** route đó từ `df9a63c` (`hr-screens.cjs:433`, trả
+`{ items: [], unread_count: 0 }`), cùng `work-queue` (429) và
+`duplicate-signals` (445). Cả 5 bài trong RED cũng không dùng fixture chung —
+mỗi bài tự `context.route('**/v1/**')`. Nên giả thuyết sai; sửa fixture không
+làm bài nào xanh.
+
+**Đo lại nhóm đỏ** (Next 15.5.29 đã build, cổng 3100, Chromium headless shell):
+**0/5 xanh, 71,7s**. Năm nguyên nhân, đo bằng cách chạy từng bài và probe trang:
+
+| Bài | Lỗi thật | Nguyên nhân |
+| --- | --- | --- |
+| `careers-public` | `TimeoutError` chờ heading `Vị trí đang tuyển dụng` | trang gọi thêm `/v1/careers/filters`; mock trả `{}` → `filters.job_families` là `undefined` → `undefined.filter` → trang trắng |
+| `test-data-purge-mock` | `TimeoutError` chờ tab `Dọn dữ liệu test` | tab nằm trong `config && options` của `/admin`; mock trả `{}` nên `active.data.config` là `undefined` → cả cụm `Tabs` không render |
+| `intake-ui` | `TimeoutError` chờ nút `Ứng tuyển thử nghiệm` | nút không xuất hiện, kể cả khi đặt `HRA_E2E_SYNTHETIC=1` |
+| `ux-metrics` | `AssertionError: leaving the profile records the leave event` | sự kiện rời hồ sơ không được ghi |
+| `ux04-sticky-viewer` | `AssertionError: … got 118px` | tiêu đề CV không thoát thanh dính 143px |
+
+**Đã sửa một chỗ, đúng loại "mock thiếu route".** `careers-public` gọi
+`/v1/careers/filters` (`app/careers/page.tsx:84`) mà mock của bài không trả lời,
+rơi vào nhánh cuối `json({})`. Thêm route trả `{ employment_types: [],
+job_families: [] }` vào `installCareersApi` — **không sửa assertion nào**. Kết
+quả: trang hết trắng, đi được tới bước kiểm ngôn ngữ.
+
+Nhưng bài đó **vẫn đỏ**, vì lý do khác và thật: trang render **2** phần tử khớp
+`getByRole('button', { name: 'Xem chi tiết' })` — thẻ nghề nghiệp là `DIV
+role=button` với `aria-label` "Xem chi tiết {title}" (`careers/page.tsx:241`)
+lồng một `BUTTON` cùng nhãn (dòng 263). Đây là lỗi a11y của trang (điều khiển
+tương tác lồng nhau), không phải lỗi mock. Muốn xanh phải sửa trang (bỏ một
+trong hai) hoặc nới assertion — cả hai đều ngoài phạm vi một sửa mock, nên
+**không làm**. Lý do trong RED đã cập nhật theo đúng lỗi quan sát được.
+
+**Không bài nào được chuyển sang GREEN.** RED vẫn 5, GREEN vẫn 38.
+
+**Đã chẩn đoán, chưa sửa** (mỗi cái là một việc riêng, không phải một route):
+`test-data-purge-mock` cần mock `/v1/admin/ai/active-config` (có `config`),
+`/v1/admin/ai/options`, `/v1/admin/worker/health`, `/v1/admin/ai/config`,
+`/v1/admin/ai/auxiliary-drafts`, `/v1/admin/ltr/models`,
+`/v1/admin/ai/bge/route-set`, `/v1/admin/ai/ltr/selection`,
+`/v1/admin/ai/reranker`, `/v1/admin/ai/usage-summary` — thiếu `route_set`,
+`selection`, `config` là trang nổ hoặc ẩn tab. `intake-ui` cần xem vì sao nút
+"Ứng tuyển thử nghiệm" không render. `ux-metrics` và `ux04-sticky-viewer` là lỗi
+hành vi/bố cục thật, không liên quan mock.
+
+**Chưa kiểm.** Chưa chạy lại `npm run test:e2e:green` sau khi sửa `careers-public`
+— thay đổi chỉ thêm một nhánh route vào mock của một bài đang RED, không ảnh
+hưởng nhóm xanh, nhưng chưa đo lại để nói chắc.
+
 ## 2026-11-28 — Đồng bộ số test backend ở `AGENTS.md` và `scripts/test-db.sh`: 919 / 187
 
 **Vấn đề.** Hai chỗ người mới đọc trước khi chạy test vẫn ghi số cũ: `AGENTS.md`
