@@ -80,6 +80,11 @@ function installRetentionApi(context) {
       cases = cases.map(item => (item.retention_case_id === caseId ? updated : item));
       return json(r, updated);
     }
+    // Hai route của khung trang: chuông thông báo và thẻ hàng đợi việc trong
+    // AppLayout. Trang này không kiểm chúng, nên trả rỗng — trước đây chúng bị
+    // tính là "endpoint lạ" và làm đỏ một bài không liên quan.
+    if (p === '/v1/notifications' && request.method() === 'GET') return json(r, { items: [], unread_count: 0 });
+    if (p === '/v1/dashboard/work-queue' && request.method() === 'GET') return json(r, []);
     if (p === '/v1/applications/app-1/status-events' && request.method() === 'GET') {
       return json(r, [
         { event_id: 'e2', previous_status: 'SHORTLIST', new_status: 'REJECTED_SCREENING', reason: 'Không đáp ứng yêu cầu bắt buộc', note: null, changed_at: '2026-10-20T08:00:00Z', changed_by_name: 'Nguyễn Thu Hằng' },

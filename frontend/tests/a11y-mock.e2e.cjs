@@ -66,6 +66,10 @@ async function noHorizontalOverflow(page, label) {
       if (p === '/v1/rubric-library/families') return json(r, []);
       if (p === '/v1/positions') return json(r, []);
       if (p === '/v1/dashboard/summary') return json(r, { total_applications: 0 });
+      // Chuông thông báo trong AppLayout hỏi hộp thư ngay khi mount; hộp thư rỗng
+      // không đổi bố cục, nên thiếu route này chỉ làm mock báo lỗi sai.
+      if (p === '/v1/notifications' && r.request().method() === 'GET') return json(r, { items: [], unread_count: 0 });
+      if (p === '/v1/dashboard/work-queue') return json(r, []);
       errors.push(p); return json(r, {}, 500);
     });
     const page = await c.newPage();
@@ -106,6 +110,8 @@ async function noHorizontalOverflow(page, label) {
       const p = new URL(r.request().url()).pathname;
       if (p === '/v1/auth/me') return json(r, { user_id: 'hm', display_name: 'HM', system_roles: ['HIRING_MANAGER'], position_assignments: [] });
       if (p === '/v1/scorecards/reminders') return json(r, []);
+      if (p === '/v1/notifications' && r.request().method() === 'GET') return json(r, { items: [], unread_count: 0 });
+      if (p === '/v1/dashboard/work-queue') return json(r, []);
       if (p === '/v1/shortlist/shared-with-me') return json(r, []);
       if (p === '/v1/shortlist/share-a11y') return json(r, { share_id: 'share-a11y', position_id: 'p1', position: { title: 'Vị trí' }, status: 'ACTIVE', allow_cv_view: false, applications: [{ application_id: 'a', candidate_name: 'An' }, { application_id: 'b', candidate_name: 'Bình' }], feedback: [] });
       if (p === '/v1/scorecards/share/share-a11y') return json(r, ['a', 'b'].map((id, i) => ({ scorecard_id: `s${id}`, application_id: id, status: 'IN_PROGRESS', revision: 1, due_at: '2031-01-01T00:00:00Z', can_edit: true, waiting_for_assessment: false, criteria_version_id: 'c', assessment_id: 'ass', strengths: '', concerns: '', overall_recommendation: null, criteria: [{ criterion_id: `cr${i}`, name: 'Python', description: 'Test', rating: null, insufficient_evidence: false, comment: null }] })));

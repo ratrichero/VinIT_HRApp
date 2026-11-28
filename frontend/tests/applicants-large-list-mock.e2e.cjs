@@ -44,6 +44,11 @@ const applications = ranking.map((item, index) => ({
     }
     if (p === '/v1/operations/position/p1/active') return json(r, null);
     if (p === '/v1/scorecards/reminders') return json(r, []);
+    // Chuông thông báo của AppLayout gọi ngay khi mount; hộp thư rỗng giữ nguyên bố cục.
+    if (p === '/v1/notifications' && r.request().method() === 'GET') return json(r, { items: [], unread_count: 0 });
+    // Màn danh sách ứng viên hỏi tín hiệu trùng khi mount; không có cặp nào trùng.
+    if (p === '/v1/positions/p1/duplicate-signals') return json(r, []);
+    if (p === '/v1/dashboard/work-queue') return json(r, []);
     errors.push(`Unexpected ${p}`);
     return json(r, {}, 500);
   });

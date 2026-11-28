@@ -23,6 +23,9 @@ const cards = (revision = 1) => ['a', 'b'].map((id, i) => ({
     const req = r.request(); const p = new URL(req.url()).pathname; const method = req.method();
     if (p === '/v1/auth/me') return json(r, { user_id: 'hm', display_name: 'HM', system_roles: ['HIRING_MANAGER'], position_assignments: [] });
     if (p === '/v1/scorecards/reminders') return json(r, []);
+    // Chuông thông báo của AppLayout gọi ngay khi mount; hộp thư rỗng giữ nguyên bố cục.
+    if (p === '/v1/notifications' && method === 'GET') return json(r, { items: [], unread_count: 0 });
+    if (p === '/v1/dashboard/work-queue' && method === 'GET') return json(r, []);
     if (p === '/v1/shortlist/shared-with-me') return json(r, []);
     if (p === '/v1/shortlist/share-draft') return revoked ? json(r, { detail: 'Đã thu hồi' }, 403) : json(r, { share_id: 'share-draft', position_id: 'p1', position: { title: 'Vị trí' }, status: 'ACTIVE', allow_cv_view: false, applications: [{ application_id: 'a', candidate_name: 'An' }, { application_id: 'b', candidate_name: 'Bình' }], feedback: [] });
     if (p === '/v1/scorecards/share/share-draft') return json(r, cards(revision).map(c => ({ ...c, strengths: c.scorecard_id === 'sa' ? savedStrengths : c.strengths })));

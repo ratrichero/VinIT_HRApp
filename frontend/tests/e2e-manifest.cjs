@@ -18,8 +18,10 @@
 
 /** Chạy được chỉ với Next server + mock `/v1`; CI chạy đúng nhóm này. */
 const GREEN = [
+  'a11y-mock.e2e.cjs',
   'account-ui.e2e.cjs',
   'applicant-criteria-filter.e2e.cjs',
+  'applicants-large-list-mock.e2e.cjs',
   'bulk-actions.e2e.cjs',
   'bulk-recovery.e2e.cjs',
   'by-criterion-confirm-all.e2e.cjs',
@@ -28,6 +30,7 @@ const GREEN = [
   'criterion-queue.e2e.cjs',
   'deadline-work-queue-mock.e2e.cjs',
   'docx-preview.e2e.cjs',
+  'draft-back-guard-mock.e2e.cjs',
   'duplicate-compare.e2e.cjs',
   'duplicate-warning.e2e.cjs',
   'finish-application.e2e.cjs',
@@ -39,9 +42,12 @@ const GREEN = [
   'profile-lazy-panels.e2e.cjs',
   'ranking-compact-mock.e2e.cjs',
   'ranking-context-mock.e2e.cjs',
+  'retention-ui.e2e.cjs',
   'review-auto-advance.e2e.cjs',
   'review-double-confirm.e2e.cjs',
   'settings-mock.e2e.cjs',
+  'shortlist-filter-mock.e2e.cjs',
+  'shortlist-workspace-mock.e2e.cjs',
   'sticky-bar-height.e2e.cjs',
   'sticky-review-actions.e2e.cjs',
   'ux02-review.e2e.cjs',
@@ -56,18 +62,14 @@ const GREEN = [
  * Đang đỏ. Mỗi dòng là một sự thật đã quan sát, không phải phỏng đoán: lý do ghi
  * theo lỗi thật của lần chạy. Sửa thì sửa **mã** (hoặc mock của fixture), rồi
  * chuyển file lên GREEN — đừng nới assertion cho vừa.
+ *
+ * 6 bài từng nằm ở đây vì mock **riêng của từng bài** (không phải fixture dùng
+ * chung) thiếu route mà khung trang gọi ở mọi trang đã đăng nhập:
+ * `/v1/notifications`, `/v1/dashboard/work-queue`, và với màn danh sách ứng viên
+ * là `/v1/positions/p1/duplicate-signals`. Thêm route trả rỗng là đủ — không
+ * assertion nào bị nới, và mỗi bài vẫn tự đỏ nếu route đó biến mất.
  */
 const RED = [
-  // Nhóm lớn nhất: fixture mock trong `fixtures/hr-screens.cjs` không có
-  // `/v1/notifications`, mà header giờ gọi endpoint đó ở mọi trang đã đăng nhập.
-  // Một chỗ sửa (thêm route vào fixture) sẽ mở khoá cả nhóm này.
-  { file: 'a11y-mock.e2e.cjs', why: 'fixture ném lỗi: mock thiếu /v1/notifications' },
-  { file: 'applicants-large-list-mock.e2e.cjs', why: 'fixture ném lỗi: Unexpected /v1/notifications' },
-  { file: 'draft-back-guard-mock.e2e.cjs', why: 'fixture ném lỗi: GET /v1/notifications' },
-  { file: 'shortlist-filter-mock.e2e.cjs', why: 'fixture ném lỗi: /v1/notifications' },
-  { file: 'shortlist-workspace-mock.e2e.cjs', why: 'fixture ném lỗi: Unexpected /v1/notifications' },
-  // Cùng gốc: test đếm request và coi mọi request ngoài danh sách là lỗi.
-  { file: 'retention-ui.e2e.cjs', why: 'API call không có trong danh sách: GET /v1/notifications, GET /v1/dashboard/work-queue' },
   { file: 'careers-public.e2e.cjs', why: 'TimeoutError: chờ phần tử không xuất hiện' },
   { file: 'test-data-purge-mock.e2e.cjs', why: 'TimeoutError: chờ phần tử không xuất hiện' },
   { file: 'intake-ui.e2e.cjs', why: 'TimeoutError, kể cả khi đặt HRA_E2E_SYNTHETIC=1' },

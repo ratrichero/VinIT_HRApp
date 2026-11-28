@@ -9,6 +9,56 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-28 — Sáu bài e2e đỏ vì mock riêng thiếu route của khung trang
+
+**Vấn đề.** Nhóm RED của `tests/e2e-manifest.cjs` có 6 bài đỏ cùng một lý do:
+mock của chúng trả 500 cho `/v1/notifications`, `/v1/dashboard/work-queue` và
+`/v1/positions/p1/duplicate-signals`. Ba route này không thuộc trang mà bài kiểm
+— chúng do `AppLayout` (chuông thông báo, thẻ hàng đợi việc) và màn danh sách ứng
+viên gọi ngay khi mount. Test đếm mọi request ngoài danh sách là lỗi, nên một
+route mới của khung trang làm đỏ cả một nhóm không liên quan.
+
+Điểm dễ chẩn đoán sai: fixture dùng chung `tests/fixtures/hr-screens.cjs` **đã**
+có hai route đầu (từ `df9a63c`). Sáu bài này không dùng `installMockApi` — mỗi
+bài tự `context.route('**/v1/**')` với danh sách route riêng, nên sửa fixture
+chung không mở khoá được gì. Phải sửa đúng mock của từng bài.
+
+**Sửa.** Thêm route trả **dữ liệu rỗng** vào mock riêng của từng bài:
+`{ items: [], unread_count: 0 }` cho `/v1/notifications`, `[]` cho
+`/v1/dashboard/work-queue` và `/v1/positions/p1/duplicate-signals`. Không đổi
+một assertion nào, không nới điều kiện nào: các bài vẫn khẳng định
+`unexpected == []`, nên route biến mất là đỏ lại ngay.
+
+**Kết quả `npm run test:e2e -- --group red`** (Next 15.5.29 dựng bằng
+`npm run build`, cổng 3100, Chromium headless shell 156):
+
+| Trước khi sửa | Sau khi sửa |
+| --- | --- |
+| 0/11 xanh, 122,4s | **6/11 xanh, 5 đỏ, 123,4s** |
+
+6 bài xanh: `a11y-mock`, `applicants-large-list-mock`, `draft-back-guard-mock`,
+`retention-ui`, `shortlist-filter-mock`, `shortlist-workspace-mock`. 5 bài còn
+đỏ giữ nguyên lý do cũ (`careers-public`, `test-data-purge-mock`, `intake-ui`,
+`ux-metrics`, `ux04-sticky-viewer`) — không đụng vào.
+
+**Manifest.** 6 bài chuyển từ RED sang GREEN, danh sách GREEN sắp theo tên
+(32 → **38 bài**); RED còn 5 dòng. `npm run test:unit` = **237 pass** (gồm 5 test
+canh manifest: file nào cũng có trong manifest, không khai file ma, không khai
+trùng nhóm, và CI thật sự gọi nhóm xanh).
+
+**Nhóm xanh (CI chạy đúng nhóm này).** `npm run test:e2e:green` = **38/38 xanh,
+328,0s** trên cùng server vừa build — 6 bài mới không những xanh riêng lẻ mà còn
+xanh khi chạy chung nhóm.
+
+**Kiểm ngược.** Chính là lần chạy "trước khi sửa" ở bảng trên: gỡ route thì bài
+đỏ đúng ở dòng `unexpected == []` với tên route vừa gỡ, nên test kiểm đúng thứ
+nó nói chứ không phải xanh vì bị nới.
+
+**Chưa kiểm.** Chưa chạy trên Chromium của CI (job `frontend-e2e` cài bằng
+`--with-deps`); máy này thiếu thư viện hệ thống nên Chromium chạy bằng
+`LD_LIBRARY_PATH` trỏ tới các gói giải nén trong `/tmp` — nếu CI đỏ, nghi thứ tự
+này trước.
+
 ## 2026-11-27 — Nhiễm trạng thái giữa hai lần chạy: `seed` phải đặt lại ngưỡng HR
 
 **Vấn đề.** `test_hr_settings_round_trip_and_reach_the_work_queue` PATCH

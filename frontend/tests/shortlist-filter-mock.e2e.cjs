@@ -11,6 +11,8 @@ const json = (r, body, status=200) => r.fulfill({status,contentType:'application
   await c.route('**/v1/**', async r=>{const p=new URL(r.request().url()).pathname;
    if(p==='/v1/auth/me') return json(r,{user_id:'hm',display_name:'HM',system_roles:['HIRING_MANAGER'],position_assignments:[]});
    if(p==='/v1/scorecards/reminders') return json(r,[]);
+   if(p==='/v1/notifications') return json(r,{items:[],unread_count:0});
+   if(p==='/v1/dashboard/work-queue') return json(r,[]);
    if(p==='/v1/shortlist/shared-with-me') return json(r,[{share_id:'one',position_id:'p1',position:{title:'Synthetic Alpha',position_code:'A'},direction:'received',status:'ACTIVE'},{share_id:'two',position_id:'p2',position:{title:'Synthetic Beta',position_code:'B'},direction:'received',status:'ACTIVE'}]);
    errors.push(p);return json(r,{},500);
   });

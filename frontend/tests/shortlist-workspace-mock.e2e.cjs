@@ -13,6 +13,8 @@ const json=(r,body,status=200)=>r.fulfill({status,contentType:'application/json'
    if(p==='/v1/auth/me') return json(r,{user_id:'hm',display_name:'HM',system_roles:['HIRING_MANAGER'],position_assignments:[]});
    if(p==='/v1/shortlist/shared-with-me') return json(r,[]);
    if(p==='/v1/scorecards/reminders') return json(r,[]);
+   if(p==='/v1/notifications') return json(r,{items:[],unread_count:0});
+   if(p==='/v1/dashboard/work-queue') return json(r,[]);
    if(p==='/v1/shortlist/share-1') return revoked ? json(r,{detail:'Đã thu hồi'},403) : json(r,{share_id:'share-1',position_id:'p1',position:{title:'Vị trí giả'},status:'ACTIVE',allow_cv_view:false,applications:[{application_id:'a',candidate_name:'An giả'},{application_id:'b',candidate_name:'Bình giả'}],feedback:[]});
    if(p==='/v1/applications/a') return json(r,{application_id:'a',position_id:'p1',can_view_cv:false,can_view_assessment_evidence:false,latest_assessment:null,documents:[]});
    if(p==='/v1/applications/b') return json(r,{application_id:'b',position_id:'p1',can_view_cv:false,can_view_assessment_evidence:false,latest_assessment:null,documents:[]});
