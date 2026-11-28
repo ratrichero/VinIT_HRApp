@@ -9,6 +9,46 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-28 — Đồng bộ số test backend ở `AGENTS.md` và `scripts/test-db.sh`: 919 / 187
+
+**Vấn đề.** Hai chỗ người mới đọc trước khi chạy test vẫn ghi số cũ: `AGENTS.md`
+§1.1 (`# kỳ vọng: 671 passed`) và tiêu đề §1.1 (`174 skipped`). `scripts/test-db.sh`
+đã được sửa trước đó nhưng ghim **918**, trong khi lượt sửa ngay sau đó thêm một
+test nên số thật là **919** — tức chính bản sửa cũng đã lệch. Người chạy thấy số
+khác tài liệu sẽ tưởng mình dựng DB sai hoặc tưởng thiếu test.
+
+**Số đo, ngày 2026-11-28, PostgreSQL 16.2 + pgvector 0.6.2 của bundle `pgserver`
+(`scripts/local-pg.sh`), DB trắng do `scripts/test-db.sh` dựng:**
+
+| Trạng thái | Kết quả |
+| --- | --- |
+| Đã export `TEST_DATABASE_URL` | **919 passed, 0 skipped** |
+| Chưa export (hoặc tên DB không kết thúc `_test`) | **732 passed, 187 skipped** |
+
+187 là số test **cần** DB, không phải test hỏng — đó là con số phải thấy khi quên
+dựng DB, nên tiêu đề §1.1 nay ghi 187 thay vì 174.
+
+**Sửa.** `AGENTS.md` §1.1: tiêu đề `174 skipped` → `187 skipped`, dòng lệnh
+`671 passed` → `919 passed`, thêm bảng hai trạng thái kèm môi trường đo và câu
+"số cũ 671 là của thời ít test hơn". `scripts/test-db.sh`: `EXPECTED_PASSED`
+918 → 919, tiêu đề file `174 integration test` → `187`, comment nói thêm trường
+hợp không có DB (`732 passed, 187 skipped`), và dòng in cuối ghi ngày đo.
+
+Cả hai file vẫn giữ câu "CI dùng PostgreSQL 17 + pgvector 0.8.x nên số có thể
+lệch; khi lệch thì log job `backend-integration` là chuẩn" — để không ai lấy số
+của máy áp cho CI.
+
+**Kiểm.** `bash -n scripts/test-db.sh` sạch; chạy lại phần cuối script in ra đúng
+`Kỳ vọng: 919 passed, 0 skipped` kèm môi trường đo. `grep 671` trong hai file chỉ
+còn ở hai câu giải thích lịch sử (cố ý giữ). Hai con số 919 và 732/187 đều là kết
+quả chạy thật trong lượt này, không suy đoán.
+
+**Chưa kiểm.** Chưa chạy trên CI (PG 17 + pgvector 0.8.x) nên **chưa biết** số ở
+đó là bao nhiêu — vì vậy tài liệu chỉ định log CI làm chuẩn. Các tài liệu khác
+còn nhắc 671 (`doc/PLAN_4_AGENT.md`, `doc/TICKETS_AGENT.md`,
+`doc/CHECKLIST_DEPLOY_LAN_DAU.md`, `doc/RA_SOAT_*.md`) **không** sửa trong mục
+này: chúng là ghi chép tại thời điểm của chúng, không phải hướng dẫn chạy test.
+
 ## 2026-11-28 — Soát nhiễm trạng thái giữa hai lần chạy: chỉ `audit_events` còn nhiễm
 
 **Vấn đề.** Commit `b84d617` đã sửa một ca nhiễm (`app_settings` giữ

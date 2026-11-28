@@ -21,7 +21,7 @@ Code định danh (tên hàm, biến, route) giữ tiếng Anh theo khuôn sẵn
 | Build | `cd frontend && npm run build` | |
 | Ruff (phạm vi CI) | xem lệnh đầy đủ trong `.github/workflows/ci.yml` | Chỉ một số file, không phải toàn repo |
 
-### 1.1. `174 skipped` nghĩa là bạn chưa dựng DB — không phải bình thường
+### 1.1. `187 skipped` nghĩa là bạn chưa dựng DB — không phải bình thường
 
 Test tích hợp **tự skip** khi không có `TEST_DATABASE_URL`. Một dòng là đủ:
 
@@ -29,8 +29,22 @@ Test tích hợp **tự skip** khi không có `TEST_DATABASE_URL`. Một dòng l
 # cổng riêng cho từng agent để không đụng nhau
 bash scripts/test-db.sh --port 55433 --name hra_agentx_test
 export TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55433/hra_agentx_test'
-pytest backend/tests -q     # kỳ vọng: 671 passed, 0 skipped
+pytest backend/tests -q     # kỳ vọng: 919 passed, 0 skipped
 ```
+
+Hai con số, đo ngày 2026-11-28 trên PostgreSQL **16.2 + pgvector 0.6.2** của
+bundle `pgserver` (tức `scripts/local-pg.sh`), DB trắng do `scripts/test-db.sh`
+dựng:
+
+| Trạng thái | Kết quả |
+|---|---|
+| Đã export `TEST_DATABASE_URL` | **919 passed, 0 skipped** |
+| Chưa export (hoặc tên DB không kết thúc `_test`) | **732 passed, 187 skipped** |
+
+187 là số test cần DB, không phải test hỏng. Số cũ "671 passed" trong tài liệu
+này là của thời ít test hơn — thấy 919 không phải là dư test. CI dùng PostgreSQL
+17 + pgvector 0.8.x nên số có thể lệch; khi lệch, log job `backend-integration`
+là chuẩn, không phải bảng này.
 
 Chưa có PostgreSQL nào chạy trên máy? `bash scripts/local-pg.sh --port 55433 --name hra_agentx_test`
 dựng luôn binary (bundle `pgserver`, không cần root), data dir, hai shim extension rồi gọi
