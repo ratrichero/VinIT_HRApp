@@ -22,6 +22,13 @@ NAME=hra_phase1_test
 USER=postgres
 EXPORT_ONLY=0
 
+# Số test mà bộ backend thực sự chạy khi có DB. Trước đây dòng cuối script ghi
+# cứng 671 — số của thời còn ít test hơn — nên người chạy thấy 918 dễ tưởng
+# mình dựng DB sai. Đo trên DB do chính script này tạo (DB trắng, áp đủ
+# migration), ngày 2026-11-28; chi tiết môi trường in ra ở cuối script.
+# Sửa số này khi số test đổi — đừng để nó lệch khỏi thực tế lần nữa.
+EXPECTED_PASSED=918
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -104,4 +111,8 @@ echo "Xong. Chạy test bằng:"
 echo "  export TEST_DATABASE_URL='${URL}'"
 echo "  python -m pytest backend/tests -q"
 echo
-echo "Kỳ vọng: 671 passed, 0 skipped (nếu còn skipped thì DB chưa dựng đúng)."
+echo "Kỳ vọng: ${EXPECTED_PASSED} passed, 0 skipped (nếu còn skipped thì DB chưa dựng đúng)."
+echo "Con số này đo trên DB trắng vừa dựng bởi chính script này:"
+echo "  PostgreSQL 16.2 + pgvector 0.6.2 của bundle pgserver (scripts/local-pg.sh), cục bộ."
+echo "CI chạy PostgreSQL 17 + pgvector 0.8.x nên số có thể lệch — khi hai bên"
+echo "khác nhau, log job backend-integration là chuẩn, không phải dòng này."

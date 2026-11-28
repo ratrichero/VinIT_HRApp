@@ -9,6 +9,37 @@ nhánh đang làm, (3) push lên nhánh đó. Nhánh chung duy nhất của dự
 `freebuff/1434fda45407dc1a68600843` (nhánh `feature/ux-finish-application` đã được
 bỏ; nội dung của nó nằm trọn trong nhánh chung).
 
+## 2026-11-28 — `scripts/test-db.sh` in "kỳ vọng 671 passed": số cũ, và không nói đo trên DB nào
+
+**Vấn đề.** Dòng cuối của `scripts/test-db.sh` — dòng người chạy đọc ngay trước
+khi gõ `pytest` — ghi cứng `671 passed`. Bộ test backend nay là **918**. Một
+người dựng DB trắng, thấy `918 passed, 0 skipped` sẽ tưởng mình dựng sai (có thể
+đi tìm DB khác, hoặc tệ hơn là bỏ qua `skipped`), trong khi thực ra mọi thứ
+đúng. Con số cũ nằm lại vì nó không gắn với thứ gì kiểm được: không ai sửa nó
+khi thêm test, và nó không nói mình đo ở đâu — PG 16.2 cục bộ hay PG 17 trên CI
+cũng có thể lệch số.
+
+**Sửa.** Đưa số thành hằng `EXPECTED_PASSED=918` ở đầu script (một chỗ để sửa,
+có comment nói rõ sửa khi nào), và in kèm **môi trường đã đo**: DB trắng do
+chính script tạo, PostgreSQL 16.2 + pgvector 0.6.2 của bundle `pgserver`
+(`scripts/local-pg.sh`), cục bộ. Thêm một câu: CI chạy PG 17 + pgvector 0.8.x
+nên số có thể lệch, khi hai bên khác nhau thì **log job `backend-integration`
+là chuẩn**, không phải dòng này. Không đổi hành vi dựng DB: cùng migration,
+cùng bỏ qua `00035`, cùng chặn host/tên DB.
+
+**Kiểm.** Dựng lại từ `/tmp` trắng: `bash scripts/local-pg.sh --port 55441
+--name hra_fixnum_test` (tạo venv, bundle PG 16.2, hai shim extension, DB, áp
+migration), rồi `pytest backend/tests -q` với `TEST_DATABASE_URL` trỏ vào DB đó
+→ **918 passed, 22 warnings, 0 skipped, 143,08s**. Đúng bằng số in ra, nên dòng
+kỳ vọng nay kiểm ngược được: sửa `EXPECTED_PASSED` thành số khác là thấy ngay
+nó lệch với lần chạy thật. `bash -n scripts/test-db.sh` sạch; chạy lại phần
+cuối script in ra đúng 918.
+
+**Chưa kiểm.** Chưa chạy lại trên CI (PG 17 + pgvector 0.8.x) nên **chưa biết**
+CI ra đúng 918 hay lệch — vì vậy dòng mới nói rõ log CI là chuẩn. `AGENTS.md`
+§1.1 (dòng 32) vẫn ghi "kỳ vọng: 671 passed"; mục này **không** sửa file đó —
+cần người điều phối đồng ý vì nó là quy ước chung của 4 agent.
+
 ## 2026-11-28 — Sáu bài e2e đỏ vì mock riêng thiếu route của khung trang
 
 **Vấn đề.** Nhóm RED của `tests/e2e-manifest.cjs` có 6 bài đỏ cùng một lý do:
